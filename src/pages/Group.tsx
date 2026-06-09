@@ -1,18 +1,43 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 
-export default function Group({ group, session, onBack }: { group: any, session: any, onBack: () => void }) {
+const EVENT_TYPES = [
+  '생일', '결혼기념일', '연애기념일', '졸업', '입사/승진',
+  '결혼', '베이비샤워', '돌잔치', '집들이', '크리스마스',
+  '발렌타인데이', '화이트데이', '명절', '기타'
+]
+
+const eventEmoji: Record<string, string> = {
+  '생일': '🎂', '결혼기념일': '💑', '연애기념일': '💕', '졸업': '🎓',
+  '입사/승진': '💼', '결혼': '💍', '베이비샤워': '👶', '돌잔치': '🎈',
+  '집들이': '🏠', '크리스마스': '🎄', '발렌타인데이': '💝', '화이트데이': '🤍',
+  '명절': '🎆', '기타': '📅'
+}
+
+export default function Group({ group: initialGroup, session, onBack }: { group: any, session: any, onBack: () => void }) {
+  const [group, setGroup] = useState(initialGroup)
   const [wishes, setWishes] = useState<any[]>([])
   const [members, setMembers] = useState<any[]>([])
   const [showAdd, setShowAdd] = useState(false)
   const [showInvite, setShowInvite] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   const [editingWish, setEditingWish] = useState<any>(null)
   const [filterMember, setFilterMember] = useState('all')
   const [filterCategory, setFilterCategory] = useState('all')
   const [addMode, setAddMode] = useState<'link'|'manual'>('link')
   const [loading, setLoading] = useState(true)
   const [viewingProfile, setViewingProfile] = useState<any>(null)
+
+  // 그룹 설정
+  const [settingName, setSettingName] = useState('')
+  const [settingVisibility, setSettingVisibility] = useState('surprise')
+  const [settingEventMode, setSettingEventMode] = useState('individual')
+  const [settingEventType, setSettingEventType] = useState('생일')
+  const [settingEventTitle, setSettingEventTitle] = useState('')
+  const [settingEventDate, setSettingEventDate] = useState('')
+  const [settingCustomEvent, setSettingCustomEvent] = useState('')
+  const [savingSettings, setSavingSettings] = useState(false)
 
   const [wishName, setWishName] = useState('')
   const [wishPrice, setWishPrice] = useState('')
@@ -69,6 +94,85 @@ export default function Group({ group, session, onBack }: { group: any, session:
     setShowEdit(true)
   }
 
+  const openSettings = () => {
+    setSettingName(group.name || '')
+    setSettingVisibility(group.buyer_visibility || 'surprise')
+    setSettingEventMode(group.event_mode || 'individual')
+    setSettingEventType(group.group_event_type || '생일')
+    setSettingEventTitle(group.group_event_title || '')
+    setSettingEventDate(group.group_event_date || '')
+    setSettingCustomEvent('')
+    setShowSettings(true)
+  }
+
+  const saveSettings = async () => {
+    if (!settingName.trim()) { alert('그룹 이름을 입력해주세요!'); return }
+    if (settingEventMode === 'group' && settingEventType !== '생일' && !settingEventDate) {
+      alert('이벤트 날짜를 입력해주세요!'); return
+    }
+  
+    const eventType = settingEventType === '기타' ? settingCustomEvent : settingEventType
+  
+    // 개별 → 공통으로 바꿀 때 위시리스트 체크
+    if (settingEventMode === 'group' && group.event_mode !== 'group') {
+      const mismatchedWishes = wishes.filter(w =>
+        w.occasion && w.occasion !== '평소 위시리스트' && w.occasion !== eventType
+      )
+  
+      if (mismatchedWishes.length > 0) {
+        const choice = window.confirm(
+          `⚠️ 위시리스트 ${mismatchedWishes.length}개의 이벤트가 [${eventType}]과 달라요.\n\n` +
+          `확인 → 모두 [${eventType}]으로 변경\n` +
+          `취소 → 다른 이벤트 상품 삭제`
+        )
+  
+        if (choice) {
+          // 모두 새 이벤트로 변경
+          await supabase.from('wishes')
+            .update({ occasion: eventType })
+            .eq('group_id', group.id)
+            .neq('occasion', eventType)
+        } else {
+          // 다른 이벤트 상품 삭제
+          const confirmed = window.confirm(
+            `정말로 [${eventType}]이 아닌 상품 ${mismatchedWishes.length}개를 삭제할까요?\n이 작업은 되돌릴 수 없어요!`
+          )
+          if (!confirmed) return
+          await supabase.from('wishes')
+            .delete()
+            .eq('group_id', group.id)
+            .neq('occasion', eventType)
+            .neq('occasion', '평소 위시리스트')
+        }
+        fetchWishes()
+      }
+    }
+  
+    setSavingSettings(true)
+    const { data, error } = await supabase
+      .from('groups')
+      .update({
+        name: settingName.trim(),
+        buyer_visibility: settingVisibility,
+        event_mode: settingEventMode,
+        group_event_type: settingEventMode === 'group' ? eventType : null,
+        group_event_title: settingEventMode === 'group' ? (settingEventTitle || eventType) : null,
+        group_event_date: settingEventMode === 'group' && settingEventType !== '생일' ? settingEventDate : null,
+      })
+      .eq('id', group.id)
+      .select()
+      .single()
+  
+    setSavingSettings(false)
+    if (!error && data) {
+      setGroup(data)
+      setShowSettings(false)
+      alert('✅ 그룹 설정이 저장됐어요!')
+    } else {
+      alert('오류: ' + error?.message)
+    }
+  }
+
   const addWish = async () => {
     if (!wishName.trim()) { alert('상품명을 입력해주세요!'); return }
     const { error } = await supabase.from('wishes').insert({
@@ -87,37 +191,20 @@ export default function Group({ group, session, onBack }: { group: any, session:
       buyer_visibility: group.buyer_visibility || 'surprise',
       status: 'available'
     })
-    if (!error) {
-      fetchWishes()
-      setShowAdd(false)
-      resetForm()
-    } else {
-      alert('오류: ' + error.message)
-    }
+    if (!error) { fetchWishes(); setShowAdd(false); resetForm() }
+    else alert('오류: ' + error.message)
   }
 
   const saveEdit = async () => {
     if (!wishName.trim()) { alert('상품명을 입력해주세요!'); return }
     const { error } = await supabase.from('wishes').update({
-      name: wishName,
-      price: wishPrice ? parseInt(wishPrice) : null,
-      shop: wishShop,
-      url: wishUrl,
-      category: wishCategory,
-      occasion: wishOccasion,
-      priority: wishPriority,
-      memo: wishMemo,
-      color: wishColor,
-      size: wishSize,
+      name: wishName, price: wishPrice ? parseInt(wishPrice) : null,
+      shop: wishShop, url: wishUrl, category: wishCategory,
+      occasion: wishOccasion, priority: wishPriority,
+      memo: wishMemo, color: wishColor, size: wishSize,
     }).eq('id', editingWish.id)
-    if (!error) {
-      fetchWishes()
-      setShowEdit(false)
-      setEditingWish(null)
-      resetForm()
-    } else {
-      alert('수정 오류: ' + error.message)
-    }
+    if (!error) { fetchWishes(); setShowEdit(false); setEditingWish(null); resetForm() }
+    else alert('수정 오류: ' + error.message)
   }
 
   const markBought = async (wish: any) => {
@@ -164,6 +251,8 @@ export default function Group({ group, session, onBack }: { group: any, session:
     return `🛍️ 누군가 구매 예정이에요`
   }
 
+  const isGroupCreator = group.created_by === session.user.id
+
   const filteredWishes = wishes.filter(w => {
     if (filterMember !== 'all' && w.user_id !== filterMember) return false
     if (filterCategory !== 'all' && w.category !== filterCategory) return false
@@ -180,6 +269,12 @@ export default function Group({ group, session, onBack }: { group: any, session:
   }
   const priorityColor: Record<string, string> = { high:'#FEE2E2', medium:'#FEF3C7', low:'#F3F4F6' }
   const priorityTextColor: Record<string, string> = { high:'#991B1B', medium:'#92400E', low:'#374151' }
+
+  const visibilityInfo: Record<string, { label: string, emoji: string }> = {
+    surprise: { label: '서프라이즈 모드', emoji: '🎁' },
+    public: { label: '모두 공개', emoji: '👀' },
+    private: { label: '완전 비공개', emoji: '🔒' },
+  }
 
   // 멤버 프로필 보기
   if (viewingProfile) {
@@ -218,12 +313,8 @@ export default function Group({ group, session, onBack }: { group: any, session:
           {(viewingProfile.clothes_size || viewingProfile.shoes_size) && (
             <div style={pCard}>
               <div style={pTitle}>📏 사이즈</div>
-              {viewingProfile.clothes_size && (
-                <div style={pRow}><span style={pLabel}>옷 사이즈</span><span style={pVal}>{viewingProfile.clothes_size}</span></div>
-              )}
-              {viewingProfile.shoes_size && (
-                <div style={pRow}><span style={pLabel}>신발 사이즈</span><span style={pVal}>{viewingProfile.shoes_size}</span></div>
-              )}
+              {viewingProfile.clothes_size && <div style={pRow}><span style={pLabel}>옷 사이즈</span><span style={pVal}>{viewingProfile.clothes_size}</span></div>}
+              {viewingProfile.shoes_size && <div style={pRow}><span style={pLabel}>신발 사이즈</span><span style={pVal}>{viewingProfile.shoes_size}</span></div>}
             </div>
           )}
           {viewingProfile.gift_preferences && (
@@ -250,12 +341,44 @@ export default function Group({ group, session, onBack }: { group: any, session:
     )
   }
 
+  const wishFormContent = (
+    <>
+      <div style={styles.modeTabs}>
+        <button style={{...styles.modeTab, ...(addMode==='link' ? styles.modeTabActive : {})}} onClick={() => setAddMode('link')}>🔗 링크로 추가</button>
+        <button style={{...styles.modeTab, ...(addMode==='manual' ? styles.modeTabActive : {})}} onClick={() => setAddMode('manual')}>✏️ 직접 입력</button>
+      </div>
+      {addMode === 'link' && <input style={styles.input} placeholder="상품 링크 (https://...)" value={wishUrl} onChange={e => setWishUrl(e.target.value)} type="url" />}
+      <input style={styles.input} placeholder="상품명 *" value={wishName} onChange={e => setWishName(e.target.value)} />
+      <input style={styles.input} placeholder="가격 (숫자만)" value={wishPrice} onChange={e => setWishPrice(e.target.value)} type="number" />
+      <input style={styles.input} placeholder="파는 곳 (예: 쿠팡, 올리브영)" value={wishShop} onChange={e => setWishShop(e.target.value)} />
+      <select style={styles.input} value={wishCategory} onChange={e => setWishCategory(e.target.value)}>
+        {['패션','뷰티','전자기기','인테리어','취미','식품','생활용품','도서','육아','반려동물','여행','기타'].map(c => <option key={c}>{c}</option>)}
+      </select>
+      <select style={styles.input} value={wishOccasion} onChange={e => setWishOccasion(e.target.value)}>
+        {['평소 위시리스트','생일','결혼기념일','연애기념일','베이비샤워','발렌타인데이','화이트데이','크리스마스','집들이','졸업','결혼','입사/승진','명절','기타'].map(o => <option key={o}>{o}</option>)}
+      </select>
+      <select style={styles.input} value={wishPriority} onChange={e => setWishPriority(e.target.value)}>
+        <option value="high">⭐ 꼭 받고 싶어요</option>
+        <option value="medium">😊 받으면 좋아요</option>
+        <option value="low">💭 언젠가 사고 싶어요</option>
+      </select>
+      <input style={styles.input} placeholder="원하는 색상 (예: 아이보리)" value={wishColor} onChange={e => setWishColor(e.target.value)} />
+      <input style={styles.input} placeholder="사이즈 (예: M, 240)" value={wishSize} onChange={e => setWishSize(e.target.value)} />
+      <input style={styles.input} placeholder="메모 (예: 50ml 사이즈로 부탁해요)" value={wishMemo} onChange={e => setWishMemo(e.target.value)} />
+    </>
+  )
+
   return (
     <div style={styles.container}>
       <div style={styles.topbar}>
         <button style={styles.backBtn} onClick={onBack}>←</button>
-        <div style={{fontWeight:700, fontSize:'17px'}}>{group.name}</div>
-        <button style={styles.shareBtn} onClick={() => setShowInvite(true)}>공유</button>
+        <div style={{fontWeight:700, fontSize:'17px', flex:1, textAlign:'center'}}>{group.name}</div>
+        <div style={{display:'flex', gap:'6px'}}>
+          {isGroupCreator && (
+            <button style={styles.settingsBtn} onClick={openSettings}>⚙️</button>
+          )}
+          <button style={styles.shareBtn} onClick={() => setShowInvite(true)}>공유</button>
+        </div>
       </div>
 
       <div style={styles.hero}>
@@ -264,6 +387,12 @@ export default function Group({ group, session, onBack }: { group: any, session:
           <span style={{fontSize:'22px', fontWeight:700, letterSpacing:'4px', color:'#F472B6'}}>{group.invite_code}</span>
           <span style={{fontSize:'12px', color:'#9CA3AF', marginLeft:'8px'}}>📋 탭해서 복사</span>
         </div>
+        {group.event_mode === 'group' && group.group_event_title && (
+          <div style={{marginTop:'8px', fontSize:'13px', color:'#6B7280'}}>
+            {eventEmoji[group.group_event_type] || '📅'} {group.group_event_title}
+            {group.group_event_date && <span style={{marginLeft:'6px', color:'#F472B6', fontWeight:600}}>· {group.group_event_date}</span>}
+          </div>
+        )}
       </div>
 
       <div style={styles.tabsWrap}>
@@ -271,19 +400,11 @@ export default function Group({ group, session, onBack }: { group: any, session:
           <div style={{...styles.tab, ...(filterMember==='all' ? styles.tabActive : {})}} onClick={() => setFilterMember('all')}>🎁 전체</div>
           {members.map(m => (
             <div key={m.id} style={{display:'flex', alignItems:'center', gap:'4px', flexShrink:0}}>
-              <div
-                style={{...styles.tab, ...(filterMember===m.id ? styles.tabActive : {})}}
-                onClick={() => setFilterMember(m.id)}
-              >
+              <div style={{...styles.tab, ...(filterMember===m.id ? styles.tabActive : {})}} onClick={() => setFilterMember(m.id)}>
                 {m.id === session.user.id ? `${m.name} (나)` : m.name}
               </div>
               {m.id !== session.user.id && (
-                <button
-                  style={{...styles.tab, padding:'6px 10px', fontSize:'14px', background:'#EDE9FE', border:'none', color:'#A78BFA', cursor:'pointer'}}
-                  onClick={() => setViewingProfile(m)}
-                >
-                  👤
-                </button>
+                <button style={{...styles.tab, padding:'6px 10px', fontSize:'14px', background:'#EDE9FE', border:'none', color:'#A78BFA', cursor:'pointer'}} onClick={() => setViewingProfile(m)}>👤</button>
               )}
             </div>
           ))}
@@ -309,12 +430,8 @@ export default function Group({ group, session, onBack }: { group: any, session:
           </div>
         ) : filteredWishes.map(w => (
           <div key={w.id} style={{...styles.wishCard, opacity: w.status==='received' ? 0.6 : 1}}>
-            {w.status === 'received' && (
-              <div style={styles.receivedBadge}>✅ 이미 받았어요</div>
-            )}
-            {w.status === 'bought' && (
-              <div style={styles.boughtBadge}>{getBuyerText(w)}</div>
-            )}
+            {w.status === 'received' && <div style={styles.receivedBadge}>✅ 이미 받았어요</div>}
+            {w.status === 'bought' && <div style={styles.boughtBadge}>{getBuyerText(w)}</div>}
             <div style={{display:'flex', gap:'12px', alignItems:'flex-start'}}>
               <div style={styles.wishThumb}>🎁</div>
               <div style={{flex:1, minWidth:0}}>
@@ -325,22 +442,14 @@ export default function Group({ group, session, onBack }: { group: any, session:
                   )}
                 </div>
                 <div style={styles.wishName}>{w.name}</div>
-                <div style={styles.wishPrice}>
-                  {w.price ? `${w.price.toLocaleString()}원` : '가격 미정'}
-                </div>
+                <div style={styles.wishPrice}>{w.price ? `${w.price.toLocaleString()}원` : '가격 미정'}</div>
                 <div style={styles.tagRow}>
                   <span style={styles.tag}>{w.category}</span>
                   {w.shop && <span style={{...styles.tag, background:'#FFF7ED', color:'#FB923C'}}>{w.shop}</span>}
-                  <span style={{...styles.tag, background: priorityColor[w.priority], color: priorityTextColor[w.priority]}}>
-                    {priorityLabel[w.priority]}
-                  </span>
+                  <span style={{...styles.tag, background: priorityColor[w.priority], color: priorityTextColor[w.priority]}}>{priorityLabel[w.priority]}</span>
                 </div>
                 {w.memo && <div style={{fontSize:'12px', color:'#6B7280', marginTop:'4px'}}>💬 {w.memo}</div>}
-                {(w.color || w.size) && (
-                  <div style={{fontSize:'12px', color:'#6B7280', marginTop:'2px'}}>
-                    {w.color && `🎨 ${w.color}`} {w.size && `📏 ${w.size}`}
-                  </div>
-                )}
+                {(w.color || w.size) && <div style={{fontSize:'12px', color:'#6B7280', marginTop:'2px'}}>{w.color && `🎨 ${w.color}`} {w.size && `📏 ${w.size}`}</div>}
                 <div style={styles.btnRow}>
                   {w.url && <button style={styles.linkBtn} onClick={() => window.open(w.url, '_blank')}>🔗 보러가기</button>}
                   {w.user_id !== session.user.id && w.status !== 'received' && (
@@ -357,12 +466,8 @@ export default function Group({ group, session, onBack }: { group: any, session:
                       <button style={styles.receivedBtn} onClick={() => markReceived(w)}>✅ 받았어요</button>
                     )
                   )}
-                  {w.user_id === session.user.id && (
-                    <button style={styles.editBtn} onClick={() => openEdit(w)}>✏️</button>
-                  )}
-                  {w.user_id === session.user.id && (
-                    <button style={styles.delBtn} onClick={() => deleteWish(w.id)}>🗑️</button>
-                  )}
+                  {w.user_id === session.user.id && <button style={styles.editBtn} onClick={() => openEdit(w)}>✏️</button>}
+                  {w.user_id === session.user.id && <button style={styles.delBtn} onClick={() => deleteWish(w.id)}>🗑️</button>}
                 </div>
               </div>
             </div>
@@ -372,76 +477,33 @@ export default function Group({ group, session, onBack }: { group: any, session:
 
       <button style={styles.fab} onClick={() => { resetForm(); setShowAdd(true) }}>+</button>
 
+      {/* 위시 추가 모달 */}
       {showAdd && (
         <div style={styles.overlay} onClick={e => { if (e.target === e.currentTarget) setShowAdd(false) }}>
           <div style={{...styles.modal, maxHeight:'90vh', overflowY:'auto'}}>
             <div style={styles.modalHandle} />
             <div style={styles.modalTitle}>🎁 위시리스트에 추가</div>
-            <div style={styles.modeTabs}>
-              <button style={{...styles.modeTab, ...(addMode==='link' ? styles.modeTabActive : {})}} onClick={() => setAddMode('link')}>🔗 링크로 추가</button>
-              <button style={{...styles.modeTab, ...(addMode==='manual' ? styles.modeTabActive : {})}} onClick={() => setAddMode('manual')}>✏️ 직접 입력</button>
-            </div>
-            {addMode === 'link' && (
-              <input style={styles.input} placeholder="상품 링크 (https://...)" value={wishUrl} onChange={e => setWishUrl(e.target.value)} type="url" />
-            )}
-            <input style={styles.input} placeholder="상품명 *" value={wishName} onChange={e => setWishName(e.target.value)} />
-            <input style={styles.input} placeholder="가격 (숫자만)" value={wishPrice} onChange={e => setWishPrice(e.target.value)} type="number" />
-            <input style={styles.input} placeholder="파는 곳 (예: 쿠팡, 올리브영)" value={wishShop} onChange={e => setWishShop(e.target.value)} />
-            <select style={styles.input} value={wishCategory} onChange={e => setWishCategory(e.target.value)}>
-              {['패션','뷰티','전자기기','인테리어','취미','식품','생활용품','도서','육아','반려동물','여행','기타'].map(c => <option key={c}>{c}</option>)}
-            </select>
-            <select style={styles.input} value={wishOccasion} onChange={e => setWishOccasion(e.target.value)}>
-              {['평소 위시리스트','생일','결혼기념일','연애기념일','베이비샤워','발렌타인데이','화이트데이','크리스마스','집들이','졸업','결혼','입사/승진','명절','기타'].map(o => <option key={o}>{o}</option>)}
-            </select>
-            <select style={styles.input} value={wishPriority} onChange={e => setWishPriority(e.target.value)}>
-              <option value="high">⭐ 꼭 받고 싶어요</option>
-              <option value="medium">😊 받으면 좋아요</option>
-              <option value="low">💭 언젠가 사고 싶어요</option>
-            </select>
-            <input style={styles.input} placeholder="원하는 색상 (예: 아이보리)" value={wishColor} onChange={e => setWishColor(e.target.value)} />
-            <input style={styles.input} placeholder="사이즈 (예: M, 240)" value={wishSize} onChange={e => setWishSize(e.target.value)} />
-            <input style={styles.input} placeholder="메모 (예: 50ml 사이즈로 부탁해요)" value={wishMemo} onChange={e => setWishMemo(e.target.value)} />
+            {wishFormContent}
             <button style={styles.btn} onClick={addWish}>🎁 추가하기</button>
             <button style={styles.cancelBtn} onClick={() => { setShowAdd(false); resetForm() }}>취소</button>
           </div>
         </div>
       )}
 
+      {/* 위시 수정 모달 */}
       {showEdit && (
         <div style={styles.overlay} onClick={e => { if (e.target === e.currentTarget) { setShowEdit(false); resetForm() } }}>
           <div style={{...styles.modal, maxHeight:'90vh', overflowY:'auto'}}>
             <div style={styles.modalHandle} />
             <div style={styles.modalTitle}>✏️ 위시 수정하기</div>
-            <div style={styles.modeTabs}>
-              <button style={{...styles.modeTab, ...(addMode==='link' ? styles.modeTabActive : {})}} onClick={() => setAddMode('link')}>🔗 링크로 추가</button>
-              <button style={{...styles.modeTab, ...(addMode==='manual' ? styles.modeTabActive : {})}} onClick={() => setAddMode('manual')}>✏️ 직접 입력</button>
-            </div>
-            {addMode === 'link' && (
-              <input style={styles.input} placeholder="상품 링크 (https://...)" value={wishUrl} onChange={e => setWishUrl(e.target.value)} type="url" />
-            )}
-            <input style={styles.input} placeholder="상품명 *" value={wishName} onChange={e => setWishName(e.target.value)} />
-            <input style={styles.input} placeholder="가격 (숫자만)" value={wishPrice} onChange={e => setWishPrice(e.target.value)} type="number" />
-            <input style={styles.input} placeholder="파는 곳 (예: 쿠팡, 올리브영)" value={wishShop} onChange={e => setWishShop(e.target.value)} />
-            <select style={styles.input} value={wishCategory} onChange={e => setWishCategory(e.target.value)}>
-              {['패션','뷰티','전자기기','인테리어','취미','식품','생활용품','도서','육아','반려동물','여행','기타'].map(c => <option key={c}>{c}</option>)}
-            </select>
-            <select style={styles.input} value={wishOccasion} onChange={e => setWishOccasion(e.target.value)}>
-              {['평소 위시리스트','생일','결혼기념일','연애기념일','베이비샤워','발렌타인데이','화이트데이','크리스마스','집들이','졸업','결혼','입사/승진','명절','기타'].map(o => <option key={o}>{o}</option>)}
-            </select>
-            <select style={styles.input} value={wishPriority} onChange={e => setWishPriority(e.target.value)}>
-              <option value="high">⭐ 꼭 받고 싶어요</option>
-              <option value="medium">😊 받으면 좋아요</option>
-              <option value="low">💭 언젠가 사고 싶어요</option>
-            </select>
-            <input style={styles.input} placeholder="원하는 색상 (예: 아이보리)" value={wishColor} onChange={e => setWishColor(e.target.value)} />
-            <input style={styles.input} placeholder="사이즈 (예: M, 240)" value={wishSize} onChange={e => setWishSize(e.target.value)} />
-            <input style={styles.input} placeholder="메모 (예: 50ml 사이즈로 부탁해요)" value={wishMemo} onChange={e => setWishMemo(e.target.value)} />
+            {wishFormContent}
             <button style={styles.btn} onClick={saveEdit}>💾 저장하기</button>
             <button style={styles.cancelBtn} onClick={() => { setShowEdit(false); resetForm() }}>취소</button>
           </div>
         </div>
       )}
 
+      {/* 초대 모달 */}
       {showInvite && (
         <div style={styles.overlay} onClick={e => { if (e.target === e.currentTarget) setShowInvite(false) }}>
           <div style={styles.modal}>
@@ -456,6 +518,104 @@ export default function Group({ group, session, onBack }: { group: any, session:
           </div>
         </div>
       )}
+
+      {/* 그룹 설정 모달 */}
+      {showSettings && (
+        <div style={styles.overlay} onClick={e => { if (e.target === e.currentTarget) setShowSettings(false) }}>
+          <div style={{...styles.modal, maxHeight:'92vh', overflowY:'auto'}}>
+            <div style={styles.modalHandle} />
+            <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px'}}>
+              <div style={styles.modalTitle}>⚙️ 그룹 설정</div>
+              <span style={{fontSize:'11px', background:'#FEF3C7', color:'#92400E', padding:'3px 8px', borderRadius:'50px', fontWeight:600}}>그룹장만 수정 가능</span>
+            </div>
+
+            {/* 그룹 기본 정보 */}
+            <div style={settingSection}>
+              <div style={settingTitle}>📝 기본 정보</div>
+              <label style={styles.label}>그룹 이름</label>
+              <input style={styles.input} placeholder="그룹 이름" value={settingName} onChange={e => setSettingName(e.target.value)} />
+            </div>
+
+            {/* 이벤트 설정 */}
+            <div style={settingSection}>
+              <div style={settingTitle}>📅 이벤트 설정</div>
+              <div style={{display:'flex', gap:'8px', marginBottom:'12px'}}>
+                {[
+                  { value: 'individual', label: '👤 개별 이벤트', desc: '각자의 생일·기념일' },
+                  { value: 'group', label: '🎉 공통 이벤트', desc: '베이비샤워·승진 등' }
+                ].map(opt => (
+                  <div key={opt.value} onClick={() => setSettingEventMode(opt.value)} style={{
+                    flex:1, padding:'10px', borderRadius:'10px', cursor:'pointer', textAlign:'center',
+                    border:`1.5px solid ${settingEventMode === opt.value ? '#F472B6' : '#E5E7EB'}`,
+                    background: settingEventMode === opt.value ? '#FDF2F8' : 'white'
+                  }}>
+                    <div style={{fontSize:'13px', fontWeight:600, color: settingEventMode === opt.value ? '#F472B6' : '#374151'}}>{opt.label}</div>
+                    <div style={{fontSize:'11px', color:'#9CA3AF', marginTop:'2px'}}>{opt.desc}</div>
+                  </div>
+                ))}
+              </div>
+
+              {settingEventMode === 'group' && (
+                <>
+                  <label style={styles.label}>이벤트 종류</label>
+                  <select style={styles.input} value={settingEventType} onChange={e => setSettingEventType(e.target.value)}>
+                    {EVENT_TYPES.map(t => <option key={t}>{t}</option>)}
+                  </select>
+                  {settingEventType === '기타' && (
+                    <input style={styles.input} placeholder="이벤트 이름 직접 입력" value={settingCustomEvent} onChange={e => setSettingCustomEvent(e.target.value)} />
+                  )}
+                  <label style={styles.label}>이벤트 이름</label>
+                  <input style={styles.input} placeholder={`예: 민수씨 ${settingEventType}`} value={settingEventTitle} onChange={e => setSettingEventTitle(e.target.value)} />
+                  {settingEventType === '생일' ? (
+                    <div style={{background:'#FDF2F8', borderRadius:'10px', padding:'10px', fontSize:'12px', color:'#F472B6', marginBottom:'12px'}}>
+                      🎂 각 멤버의 프로필 생일이 자동으로 연동돼요!
+                    </div>
+                  ) : (
+                    <>
+                      <label style={styles.label}>이벤트 날짜</label>
+                      <input style={styles.input} type="date" value={settingEventDate} onChange={e => setSettingEventDate(e.target.value)} />
+                    </>
+                  )}
+                </>
+              )}
+
+              {settingEventMode === 'individual' && (
+                <div style={{background:'#EDE9FE', borderRadius:'10px', padding:'10px', fontSize:'12px', color:'#A78BFA'}}>
+                  👤 각 멤버가 프로필에서 자신의 이벤트를 추가해요!
+                </div>
+              )}
+            </div>
+
+            {/* 구매자 공개 설정 */}
+            <div style={settingSection}>
+              <div style={settingTitle}>👀 구매자 공개 설정</div>
+              {[
+                { value: 'surprise', label: '🎁 서프라이즈 모드', desc: '받는 사람에게 구매자가 보이지 않아요' },
+                { value: 'public', label: '👀 모두 공개', desc: '그룹 멤버 모두 구매자를 볼 수 있어요' },
+                { value: 'private', label: '🔒 완전 비공개', desc: '구매자 이름을 모두에게 숨겨요' },
+              ].map(opt => (
+                <div key={opt.value} onClick={() => setSettingVisibility(opt.value)} style={{
+                  padding:'10px 12px', marginBottom:'8px', borderRadius:'10px', cursor:'pointer',
+                  border:`1.5px solid ${settingVisibility === opt.value ? '#F472B6' : '#E5E7EB'}`,
+                  background: settingVisibility === opt.value ? '#FDF2F8' : 'white',
+                  display:'flex', alignItems:'center', justifyContent:'space-between'
+                }}>
+                  <div>
+                    <div style={{fontSize:'13px', fontWeight:600, color: settingVisibility === opt.value ? '#F472B6' : '#374151'}}>{opt.label}</div>
+                    <div style={{fontSize:'11px', color:'#9CA3AF', marginTop:'2px'}}>{opt.desc}</div>
+                  </div>
+                  {settingVisibility === opt.value && <span style={{color:'#F472B6'}}>✅</span>}
+                </div>
+              ))}
+            </div>
+
+            <button style={styles.btn} onClick={saveSettings} disabled={savingSettings}>
+              {savingSettings ? '저장 중...' : '💾 설정 저장하기'}
+            </button>
+            <button style={styles.cancelBtn} onClick={() => setShowSettings(false)}>취소</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -465,12 +625,15 @@ const pTitle: React.CSSProperties = { fontSize:'15px', fontWeight:700, color:'#1
 const pRow: React.CSSProperties = { display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'8px', gap:'12px' }
 const pLabel: React.CSSProperties = { fontSize:'13px', color:'#6B7280', flexShrink:0 }
 const pVal: React.CSSProperties = { fontSize:'13px', color:'#111827', fontWeight:500, textAlign:'right' }
+const settingSection: React.CSSProperties = { background:'#F9FAFB', borderRadius:'12px', padding:'14px', marginBottom:'12px' }
+const settingTitle: React.CSSProperties = { fontSize:'14px', fontWeight:700, color:'#374151', marginBottom:'12px' }
 
 const styles: Record<string, React.CSSProperties> = {
   container: { minHeight:'100vh', background:'#F9FAFB', fontFamily:'sans-serif' },
   topbar: { background:'white', padding:'14px 20px', display:'flex', alignItems:'center', justifyContent:'space-between', borderBottom:'1px solid #F3F4F6', position:'sticky', top:0, zIndex:50 },
   backBtn: { background:'none', border:'none', fontSize:'20px', cursor:'pointer', color:'#6B7280', padding:'4px' },
   shareBtn: { background:'white', border:'1.5px solid #E5E7EB', borderRadius:'50px', padding:'8px 16px', fontSize:'13px', cursor:'pointer' },
+  settingsBtn: { background:'#F3F4F6', border:'none', borderRadius:'50px', padding:'8px 12px', fontSize:'16px', cursor:'pointer' },
   hero: { background:'linear-gradient(135deg, #FDF2F8, #EDE9FE)', padding:'20px', textAlign:'center' },
   codeBox: { display:'inline-flex', alignItems:'center', background:'white', borderRadius:'50px', padding:'10px 20px', cursor:'pointer', border:'1px solid #E5E7EB' },
   tabsWrap: { background:'white', borderBottom:'1px solid #F3F4F6', overflowX:'auto' },
@@ -500,12 +663,13 @@ const styles: Record<string, React.CSSProperties> = {
   overlay: { position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', display:'flex', alignItems:'flex-end', justifyContent:'center', zIndex:200 },
   modal: { background:'white', borderRadius:'24px 24px 0 0', width:'100%', maxWidth:'480px', padding:'20px 20px 40px' },
   modalHandle: { width:'40px', height:'4px', background:'#E5E7EB', borderRadius:'2px', margin:'0 auto 20px' },
-  modalTitle: { fontSize:'18px', fontWeight:700, marginBottom:'20px' },
+  modalTitle: { fontSize:'18px', fontWeight:700, marginBottom:'0' },
   modeTabs: { display:'flex', marginBottom:'16px', borderRadius:'10px', overflow:'hidden', border:'1.5px solid #E5E7EB' },
   modeTab: { flex:1, padding:'10px', textAlign:'center', cursor:'pointer', fontSize:'13px', fontWeight:500, color:'#6B7280', background:'white', border:'none', fontFamily:'sans-serif' },
   modeTabActive: { background:'#F472B6', color:'white', fontWeight:700 },
   input: { width:'100%', padding:'13px 16px', marginBottom:'12px', border:'1.5px solid #E5E7EB', borderRadius:'12px', fontSize:'14px', outline:'none', boxSizing:'border-box', fontFamily:'sans-serif' },
   btn: { width:'100%', padding:'14px', background:'linear-gradient(135deg, #F472B6, #A78BFA)', color:'white', border:'none', borderRadius:'50px', fontSize:'15px', fontWeight:700, cursor:'pointer' },
   cancelBtn: { width:'100%', padding:'12px', background:'none', border:'none', color:'#9CA3AF', fontSize:'14px', cursor:'pointer', marginTop:'8px' },
-  inviteBox: { background:'#F9FAFB', borderRadius:'16px', padding:'24px', textAlign:'center', border:'2px dashed #E5E7EB', marginBottom:'16px' }
+  inviteBox: { background:'#F9FAFB', borderRadius:'16px', padding:'24px', textAlign:'center', border:'2px dashed #E5E7EB', marginBottom:'16px' },
+  label: { fontSize:'13px', fontWeight:600, color:'#374151', marginBottom:'6px', display:'block' }
 }
