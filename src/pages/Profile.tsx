@@ -27,6 +27,8 @@ export default function Profile({ session, onBack }: { session: any, onBack: () 
   const [skinType, setSkinType] = useState('')
   const [giftPreferences, setGiftPreferences] = useState('')
   const [unwantedGifts, setUnwantedGifts] = useState('')
+  const [ddayAlertDays, setDdayAlertDays] = useState<number | string>(30)
+  const [customDays, setCustomDays] = useState('')
 
   const [events, setEvents] = useState<any[]>([])
   const [showAddEvent, setShowAddEvent] = useState(false)
@@ -60,6 +62,11 @@ export default function Profile({ session, onBack }: { session: any, onBack: () 
       setSkinType(data.skin_type || '')
       setGiftPreferences(data.gift_preferences || '')
       setUnwantedGifts(data.unwanted_gifts || '')
+      const alertDays = data.dday_alert_days
+      if (alertDays === 9999) setDdayAlertDays(9999)
+      else if ([30, 60, 90].includes(alertDays)) setDdayAlertDays(alertDays)
+      else if (alertDays) { setDdayAlertDays('custom'); setCustomDays(String(alertDays)) }
+      else setDdayAlertDays(30)
     }
     setLoading(false)
   }
@@ -76,6 +83,7 @@ export default function Profile({ session, onBack }: { session: any, onBack: () 
 
   const saveProfile = async () => {
     setSaving(true)
+    const alertDays = ddayAlertDays === 'custom' ? (parseInt(customDays) || 30) : Number(ddayAlertDays)
     const { error } = await supabase.from('profiles').upsert({
       id: session.user.id,
       email: session.user.email,
@@ -89,6 +97,7 @@ export default function Profile({ session, onBack }: { session: any, onBack: () 
       skin_type: skinType,
       gift_preferences: giftPreferences,
       unwanted_gifts: unwantedGifts,
+      dday_alert_days: alertDays,
     })
     setSaving(false)
     if (!error) { alert('✅ 프로필이 저장됐어요!'); onBack() }
@@ -96,68 +105,41 @@ export default function Profile({ session, onBack }: { session: any, onBack: () 
   }
 
   const resetEventForm = () => {
-    setNewEventType('생일')
-    setNewEventTitle('')
-    setNewEventDate('')
-    setNewEventRepeat(true)
-    setCustomEventType('')
-    setEditingEvent(null)
+    setNewEventType('생일'); setNewEventTitle(''); setNewEventDate('')
+    setNewEventRepeat(true); setCustomEventType(''); setEditingEvent(null)
   }
 
   const addEvent = async () => {
     const eventType = newEventType === '기타' ? customEventType : newEventType
     if (!eventType) { alert('이벤트 종류를 입력해주세요!'); return }
     if (!newEventDate && newEventType !== '생일') { alert('날짜를 입력해주세요!'); return }
-
     const { error } = await supabase.from('events').insert({
-      user_id: session.user.id,
-      group_id: null,
-      title: newEventTitle || eventType,
-      event_type: eventType,
+      user_id: session.user.id, group_id: null,
+      title: newEventTitle || eventType, event_type: eventType,
       event_date: newEventType === '생일' ? birthday || null : newEventDate,
-      is_group_event: false,
-      use_profile_birthday: newEventType === '생일',
+      is_group_event: false, use_profile_birthday: newEventType === '생일',
       is_recurring: newEventRepeat
     })
-
-    if (!error) {
-      fetchEvents()
-      setShowAddEvent(false)
-      resetEventForm()
-    } else {
-      alert('오류: ' + error.message)
-    }
+    if (!error) { fetchEvents(); setShowAddEvent(false); resetEventForm() }
+    else alert('오류: ' + error.message)
   }
 
   const openEditEvent = (e: any) => {
-    setEditingEvent(e)
-    setNewEventType(e.event_type)
-    setNewEventTitle(e.title)
-    setNewEventDate(e.event_date || '')
-    setNewEventRepeat(e.is_recurring ?? true)
-    setCustomEventType('')
-    setShowEditEvent(true)
+    setEditingEvent(e); setNewEventType(e.event_type); setNewEventTitle(e.title)
+    setNewEventDate(e.event_date || ''); setNewEventRepeat(e.is_recurring ?? true)
+    setCustomEventType(''); setShowEditEvent(true)
   }
 
   const saveEditEvent = async () => {
     const eventType = newEventType === '기타' ? customEventType : newEventType
     if (!eventType) { alert('이벤트 종류를 입력해주세요!'); return }
-
     const { error } = await supabase.from('events').update({
-      title: newEventTitle || eventType,
-      event_type: eventType,
+      title: newEventTitle || eventType, event_type: eventType,
       event_date: newEventType === '생일' ? birthday || null : newEventDate,
-      is_recurring: newEventRepeat,
-      use_profile_birthday: newEventType === '생일'
+      is_recurring: newEventRepeat, use_profile_birthday: newEventType === '생일'
     }).eq('id', editingEvent.id)
-
-    if (!error) {
-      fetchEvents()
-      setShowEditEvent(false)
-      resetEventForm()
-    } else {
-      alert('수정 오류: ' + error.message)
-    }
+    if (!error) { fetchEvents(); setShowEditEvent(false); resetEventForm() }
+    else alert('수정 오류: ' + error.message)
   }
 
   const deleteEvent = async (id: string) => {
@@ -168,8 +150,7 @@ export default function Profile({ session, onBack }: { session: any, onBack: () 
 
   const getDday = (dateStr: string, isRecurring: boolean) => {
     if (!dateStr) return null
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
+    const today = new Date(); today.setHours(0, 0, 0, 0)
     const eventDate = new Date(dateStr)
     if (isRecurring) {
       eventDate.setFullYear(today.getFullYear())
@@ -181,20 +162,17 @@ export default function Profile({ session, onBack }: { session: any, onBack: () 
     return `D-${diff}`
   }
 
-  const EventForm = () => (
+  const EventFormFields = () => (
     <>
       <label style={styles.label}>이벤트 종류</label>
       <select style={styles.input} value={newEventType} onChange={e => setNewEventType(e.target.value)}>
         {EVENT_TYPES.map(t => <option key={t}>{t}</option>)}
       </select>
-
       {newEventType === '기타' && (
         <input style={styles.input} placeholder="이벤트 이름 직접 입력" value={customEventType} onChange={e => setCustomEventType(e.target.value)} />
       )}
-
       <label style={styles.label}>이벤트 이름 (선택)</label>
       <input style={styles.input} placeholder={`예: 내 ${newEventType}`} value={newEventTitle} onChange={e => setNewEventTitle(e.target.value)} />
-
       {newEventType === '생일' ? (
         <div style={{background:'#FDF2F8', borderRadius:'10px', padding:'12px', marginBottom:'12px', fontSize:'13px', color:'#F472B6'}}>
           🎂 프로필에 저장된 생일 날짜가 자동으로 연동돼요!
@@ -205,22 +183,17 @@ export default function Profile({ session, onBack }: { session: any, onBack: () 
           <input style={styles.input} type="date" value={newEventDate} onChange={e => setNewEventDate(e.target.value)} />
         </>
       )}
-
       <label style={styles.label}>반복 설정</label>
       <div style={{display:'flex', gap:'8px', marginBottom:'16px'}}>
         {[
           { value: true, label: '🔄 매년 반복', desc: '생일, 기념일 등' },
           { value: false, label: '1️⃣ 일회성', desc: '결혼식, 졸업 등' }
         ].map(opt => (
-          <div
-            key={String(opt.value)}
-            onClick={() => setNewEventRepeat(opt.value)}
-            style={{
-              flex:1, padding:'10px', borderRadius:'10px', cursor:'pointer', textAlign:'center',
-              border:`1.5px solid ${newEventRepeat === opt.value ? '#F472B6' : '#E5E7EB'}`,
-              background: newEventRepeat === opt.value ? '#FDF2F8' : 'white'
-            }}
-          >
+          <div key={String(opt.value)} onClick={() => setNewEventRepeat(opt.value)} style={{
+            flex:1, padding:'10px', borderRadius:'10px', cursor:'pointer', textAlign:'center',
+            border:`1.5px solid ${newEventRepeat === opt.value ? '#F472B6' : '#E5E7EB'}`,
+            background: newEventRepeat === opt.value ? '#FDF2F8' : 'white'
+          }}>
             <div style={{fontSize:'13px', fontWeight:600, color: newEventRepeat === opt.value ? '#F472B6' : '#374151'}}>{opt.label}</div>
             <div style={{fontSize:'11px', color:'#9CA3AF', marginTop:'2px'}}>{opt.desc}</div>
           </div>
@@ -258,13 +231,50 @@ export default function Profile({ session, onBack }: { session: any, onBack: () 
           </div>
         </div>
 
+        {/* D-day 알림 설정 */}
+        <div style={styles.section}>
+          <div style={styles.sectionTitle}>🔔 D-day 알림 설정</div>
+          <div style={styles.hint}>얼마 전부터 이벤트 알림 카드를 보여줄까요?</div>
+          <div style={{display:'flex', flexDirection:'column', gap:'8px', marginTop:'12px'}}>
+            {[
+              { value: 30, label: 'D-30', desc: '1개월 전부터' },
+              { value: 60, label: 'D-60', desc: '2개월 전부터' },
+              { value: 90, label: 'D-90', desc: '3개월 전부터' },
+              { value: 9999, label: '항상 표시', desc: '모든 이벤트 항상 보기' },
+              { value: 'custom', label: '직접 설정', desc: '원하는 기간 입력' },
+            ].map(opt => (
+              <div key={String(opt.value)} onClick={() => setDdayAlertDays(opt.value as any)} style={{
+                padding:'12px 14px', borderRadius:'12px', cursor:'pointer',
+                border:`1.5px solid ${ddayAlertDays === opt.value ? '#F472B6' : '#E5E7EB'}`,
+                background: ddayAlertDays === opt.value ? '#FDF2F8' : 'white',
+                display:'flex', alignItems:'center', justifyContent:'space-between'
+              }}>
+                <div>
+                  <span style={{fontSize:'14px', fontWeight:600, color: ddayAlertDays === opt.value ? '#F472B6' : '#374151'}}>{opt.label}</span>
+                  <span style={{fontSize:'12px', color:'#9CA3AF', marginLeft:'8px'}}>{opt.desc}</span>
+                </div>
+                {ddayAlertDays === opt.value && <span style={{color:'#F472B6'}}>✅</span>}
+              </div>
+            ))}
+            {ddayAlertDays === 'custom' && (
+              <div style={{display:'flex', alignItems:'center', gap:'8px', marginTop:'4px', padding:'0 4px'}}>
+                <input
+                  style={{...styles.input, marginBottom:0, flex:1}}
+                  type="number" placeholder="예: 45"
+                  value={customDays} onChange={e => setCustomDays(e.target.value)}
+                />
+                <span style={{fontSize:'13px', color:'#6B7280', flexShrink:0}}>일 전부터</span>
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* 내 이벤트 */}
         <div style={styles.section}>
           <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'14px'}}>
             <div style={styles.sectionTitle}>📅 내 이벤트</div>
             <button style={styles.addEventBtn} onClick={() => { resetEventForm(); setShowAddEvent(true) }}>+ 추가</button>
           </div>
-
           {events.length === 0 ? (
             <div style={{textAlign:'center', padding:'20px', color:'#9CA3AF', fontSize:'13px'}}>
               아직 이벤트가 없어요<br/>이벤트를 추가하면 그룹 멤버들에게 알림이 가요!
@@ -288,9 +298,7 @@ export default function Profile({ session, onBack }: { session: any, onBack: () 
                     background: dday === 'D-DAY' ? '#F472B6' : dday === '지남' ? '#F3F4F6' : '#EDE9FE',
                     color: dday === 'D-DAY' ? 'white' : dday === '지남' ? '#9CA3AF' : '#A78BFA',
                     padding:'4px 10px', borderRadius:'50px', fontSize:'12px', fontWeight:700, flexShrink:0
-                  }}>
-                    {dday}
-                  </div>
+                  }}>{dday}</div>
                 )}
                 <button style={{...styles.delEventBtn, color:'#A78BFA', marginRight:'2px'}} onClick={() => openEditEvent(e)}>✏️</button>
                 <button style={styles.delEventBtn} onClick={() => deleteEvent(e.id)}>🗑️</button>
@@ -367,7 +375,7 @@ export default function Profile({ session, onBack }: { session: any, onBack: () 
           <div style={{...styles.modal, maxHeight:'90vh', overflowY:'auto'}}>
             <div style={styles.modalHandle} />
             <div style={styles.modalTitle}>📅 이벤트 추가</div>
-            <EventForm />
+            <EventFormFields />
             <button style={styles.btn} onClick={addEvent}>추가하기</button>
             <button style={styles.cancelBtn} onClick={() => { setShowAddEvent(false); resetEventForm() }}>취소</button>
           </div>
@@ -380,7 +388,7 @@ export default function Profile({ session, onBack }: { session: any, onBack: () 
           <div style={{...styles.modal, maxHeight:'90vh', overflowY:'auto'}}>
             <div style={styles.modalHandle} />
             <div style={styles.modalTitle}>✏️ 이벤트 수정</div>
-            <EventForm />
+            <EventFormFields />
             <button style={styles.btn} onClick={saveEditEvent}>💾 저장하기</button>
             <button style={styles.cancelBtn} onClick={() => { setShowEditEvent(false); resetEventForm() }}>취소</button>
           </div>

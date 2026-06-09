@@ -9,6 +9,24 @@ const EVENT_TYPES = [
   '발렌타인데이', '화이트데이', '명절', '기타'
 ]
 
+const eventEmoji: Record<string, string> = {
+  '생일': '🎂', '결혼기념일': '💑', '연애기념일': '💕', '졸업': '🎓',
+  '입사/승진': '💼', '결혼': '💍', '베이비샤워': '👶', '돌잔치': '🎈',
+  '집들이': '🏠', '크리스마스': '🎄', '발렌타인데이': '💝', '화이트데이': '🤍',
+  '명절': '🎆', '기타': '📅'
+}
+
+interface DdayCard {
+  groupId: string
+  groupName: string
+  memberName: string
+  eventType: string
+  eventTitle: string
+  dday: number
+  wishCount: number
+  memberId: string
+}
+
 export default function Home({ session }: { session: any }) {
   const [groups, setGroups] = useState<any[]>([])
   const [currentGroup, setCurrentGroup] = useState<any>(null)
@@ -26,6 +44,7 @@ export default function Home({ session }: { session: any }) {
   const [joinCode, setJoinCode] = useState('')
   const [profile, setProfile] = useState<any>(null)
   const [loading, setLoading] = useState(true)
+  const [ddayCards, setDdayCards] = useState<DdayCard[]>([])
 
   useEffect(() => {
     fetchProfile()
@@ -46,19 +65,140 @@ export default function Home({ session }: { session: any }) {
       .from('group_members')
       .select('group_id, groups(*)')
       .eq('user_id', session.user.id)
-    if (data) setGroups(data.map((d: any) => d.groups).filter(Boolean))
+    if (data) {
+      const groupList = data.map((d: any) => d.groups).filter(Boolean)
+      setGroups(groupList)
+      await fetchDdayCards(groupList)
+    }
     setLoading(false)
   }
 
+  const fetchDdayCards = async (groupList: any[]) => {
+    const cards: DdayCard[] = []
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+
+    const { data: myProfile } = await supabase
+      .from('profiles')
+      .select('dday_alert_days')
+      .eq('id', session.user.id)
+      .single()
+    const alertDays = myProfile?.dday_alert_days || 30
+    const maxDays = alertDays === 9999 ? 99999 : alertDays
+
+    for (const g of groupList) {
+      // 공통 이벤트 그룹
+      if (g.event_mode === 'group' && g.group_event_type) {
+        if (g.group_event_type === '생일') {
+          const { data: members } = await supabase
+            .from('group_members')
+            .select('profiles(id, name, birthday)')
+            .eq('group_id', g.id)
+          if (members) {
+            for (const m of members) {
+              const p: any = m.profiles
+              if (p?.birthday && p.id !== session.user.id) {
+                const bd = new Date(p.birthday)
+                bd.setFullYear(today.getFullYear())
+                if (bd < today) bd.setFullYear(today.getFullYear() + 1)
+                const diff = Math.ceil((bd.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+                if (diff <= maxDays) {
+                  const { data: wishes } = await supabase
+                    .from('wishes').select('id')
+                    .eq('group_id', g.id).eq('user_id', p.id).eq('status', 'available')
+                  cards.push({
+                    groupId: g.id, groupName: g.name, memberName: p.name,
+                    eventType: '생일', eventTitle: `${p.name}님 생일`,
+                    dday: diff, wishCount: wishes?.length || 0, memberId: p.id
+                  })
+                }
+              }
+            }
+          }
+        } else if (g.group_event_date) {
+          const eventDate = new Date(g.group_event_date)
+          const diff = Math.ceil((eventDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+          if (diff >= 0 && diff <= maxDays) {
+            const { data: wishes } = await supabase
+              .from('wishes').select('id')
+              .eq('group_id', g.id).eq('status', 'available')
+            cards.push({
+              groupId: g.id, groupName: g.name, memberName: '',
+              eventType: g.group_event_type,
+              eventTitle: g.group_event_title || g.group_event_type,
+              dday: diff, wishCount: wishes?.length || 0, memberId: ''
+            })
+          }
+        }
+      }
+
+      // 개별 이벤트 그룹
+      if (g.event_mode === 'individual') {
+        const { data: members } = await supabase
+          .from('group_members')
+          .select('profiles(id, name, birthday)')
+          .eq('group_id', g.id)
+
+        if (members) {
+          for (const m of members) {
+            const p: any = m.profiles
+            if (p?.birthday && p.id !== session.user.id) {
+              const bd = new Date(p.birthday)
+              bd.setFullYear(today.getFullYear())
+              if (bd < today) bd.setFullYear(today.getFullYear() + 1)
+              const diff = Math.ceil((bd.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+              if (diff <= maxDays) {
+                const { data: wishes } = await supabase
+                  .from('wishes').select('id')
+                  .eq('group_id', g.id).eq('user_id', p.id).eq('status', 'available')
+                cards.push({
+                  groupId: g.id, groupName: g.name, memberName: p.name,
+                  eventType: '생일', eventTitle: `${p.name}님 생일`,
+                  dday: diff, wishCount: wishes?.length || 0, memberId: p.id
+                })
+              }
+            }
+          }
+        }
+
+        // 개인 등록 이벤트
+        const { data: events } = await supabase
+          .from('events')
+          .select('*, profiles(name)')
+          .eq('is_group_event', false)
+          .neq('user_id', session.user.id)
+
+        if (events && members) {
+          for (const ev of events) {
+            const memberInGroup = members.find((m: any) => m.profiles?.id === ev.user_id)
+            if (!memberInGroup || !ev.event_date) continue
+            const evDate = new Date(ev.event_date)
+            if (ev.is_recurring) {
+              evDate.setFullYear(today.getFullYear())
+              if (evDate < today) evDate.setFullYear(today.getFullYear() + 1)
+            }
+            const diff = Math.ceil((evDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+            if (diff >= 0 && diff <= maxDays) {
+              const p: any = memberInGroup.profiles
+              cards.push({
+                groupId: g.id, groupName: g.name, memberName: p?.name || '',
+                eventType: ev.event_type, eventTitle: ev.title,
+                dday: diff, wishCount: 0, memberId: ev.user_id
+              })
+            }
+          }
+        }
+      }
+    }
+
+    cards.sort((a, b) => a.dday - b.dday)
+    setDdayCards(cards)
+  }
+
   const resetCreateForm = () => {
-    setNewGroupName('')
-    setNewGroupType('친구')
-    setNewGroupVisibility('surprise')
-    setNewEventMode('individual')
-    setNewGroupEventType('생일')
-    setNewGroupEventTitle('')
-    setNewGroupEventDate('')
-    setNewGroupCustomEvent('')
+    setNewGroupName(''); setNewGroupType('친구'); setNewGroupVisibility('surprise')
+    setNewEventMode('individual'); setNewGroupEventType('생일')
+    setNewGroupEventTitle(''); setNewGroupEventDate(''); setNewGroupCustomEvent('')
   }
 
   const createGroup = async () => {
@@ -66,34 +206,21 @@ export default function Home({ session }: { session: any }) {
     if (newEventMode === 'group' && newGroupEventType !== '생일' && !newGroupEventDate) {
       alert('이벤트 날짜를 입력해주세요!'); return
     }
-
     const code = Math.random().toString(36).substr(2, 6).toUpperCase()
     const eventType = newGroupEventType === '기타' ? newGroupCustomEvent : newGroupEventType
-
     const { data: groupData, error: groupError } = await supabase
       .from('groups')
       .insert({
-        name: newGroupName.trim(),
-        group_type: newGroupType,
-        invite_code: code,
-        created_by: session.user.id,
-        buyer_visibility: newGroupVisibility,
-        event_mode: newEventMode,
+        name: newGroupName.trim(), group_type: newGroupType,
+        invite_code: code, created_by: session.user.id,
+        buyer_visibility: newGroupVisibility, event_mode: newEventMode,
         group_event_type: newEventMode === 'group' ? eventType : null,
         group_event_title: newEventMode === 'group' ? (newGroupEventTitle || eventType) : null,
         group_event_date: newEventMode === 'group' && newGroupEventType !== '생일' ? newGroupEventDate : null,
       })
-      .select()
-      .single()
-
+      .select().single()
     if (groupError) { alert('그룹 생성 오류: ' + groupError.message); return }
-
-    const { error: memberError } = await supabase
-      .from('group_members')
-      .insert({ group_id: groupData.id, user_id: session.user.id })
-
-    if (memberError) { alert('멤버 추가 오류: ' + memberError.message); return }
-
+    await supabase.from('group_members').insert({ group_id: groupData.id, user_id: session.user.id })
     setGroups(prev => [...prev, groupData])
     setShowCreate(false)
     resetCreateForm()
@@ -102,22 +229,12 @@ export default function Home({ session }: { session: any }) {
 
   const joinGroup = async () => {
     if (!joinCode.trim()) return
-    const { data: group } = await supabase
-      .from('groups')
-      .select('*')
-      .eq('invite_code', joinCode.toUpperCase())
-      .single()
-
+    const { data: group } = await supabase.from('groups').select('*').eq('invite_code', joinCode.toUpperCase()).single()
     if (!group) { alert('❌ 초대 코드를 찾을 수 없어요!'); return }
-
-    const { error: memberError } = await supabase
-      .from('group_members')
-      .insert({ group_id: group.id, user_id: session.user.id })
-
-    if (!memberError) {
+    const { error } = await supabase.from('group_members').insert({ group_id: group.id, user_id: session.user.id })
+    if (!error) {
       setGroups(prev => [...prev, group])
-      setShowJoin(false)
-      setJoinCode('')
+      setShowJoin(false); setJoinCode('')
       alert(`🎉 "${group.name}" 그룹에 참여했어요!`)
     } else {
       alert('이미 참여한 그룹이에요!')
@@ -128,17 +245,10 @@ export default function Home({ session }: { session: any }) {
     '커플': '💑', '가족': '👨‍👩‍👧', '친구': '🎂', '직장': '💼', '기타': '🎁'
   }
 
-  const eventEmoji: Record<string, string> = {
-    '생일': '🎂', '결혼기념일': '💑', '연애기념일': '💕', '졸업': '🎓',
-    '입사/승진': '💼', '결혼': '💍', '베이비샤워': '👶', '돌잔치': '🎈',
-    '집들이': '🏠', '크리스마스': '🎄', '발렌타인데이': '💝', '화이트데이': '🤍',
-    '명절': '🎆', '기타': '📅'
-  }
-
-  const visibilityInfo: Record<string, { label: string, desc: string, emoji: string }> = {
-    surprise: { label: '서프라이즈 모드', desc: '받는 사람에게 구매자가 보이지 않아요', emoji: '🎁' },
-    public: { label: '모두 공개', desc: '그룹 멤버 모두 구매자를 볼 수 있어요', emoji: '👀' },
-    private: { label: '완전 비공개', desc: '구매자 이름을 모두에게 숨겨요', emoji: '🔒' },
+  const visibilityInfo: Record<string, { label: string, emoji: string }> = {
+    surprise: { label: '서프라이즈 모드', emoji: '🎁' },
+    public: { label: '모두 공개', emoji: '👀' },
+    private: { label: '완전 비공개', emoji: '🔒' },
   }
 
   if (showProfile) {
@@ -163,6 +273,36 @@ export default function Home({ session }: { session: any }) {
           <button style={styles.logoutBtn} onClick={() => supabase.auth.signOut()}>로그아웃</button>
         </div>
       </div>
+
+      {/* D-day 알림 카드 */}
+      {ddayCards.length > 0 && (
+        <div style={styles.ddaySection}>
+          <div style={styles.ddaySectionTitle}>🔔 다가오는 이벤트</div>
+          <div style={styles.ddayList}>
+            {ddayCards.map((card, i) => (
+              <div key={i} style={styles.ddayCard} onClick={() => {
+                const g = groups.find(g => g.id === card.groupId)
+                if (g) setCurrentGroup(g)
+              }}>
+                <div style={styles.ddayEmoji}>{eventEmoji[card.eventType] || '📅'}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={styles.ddayTitle}>{card.eventTitle}</div>
+                  <div style={styles.ddayMeta}>
+                    {card.groupName} · {card.wishCount > 0 ? `위시 ${card.wishCount}개` : '아직 위시리스트가 없어요'}
+                  </div>
+                </div>
+                <div style={{
+                  ...styles.ddayBadge,
+                  background: card.dday === 0 ? '#F472B6' : card.dday <= 7 ? '#FEE2E2' : '#EDE9FE',
+                  color: card.dday === 0 ? 'white' : card.dday <= 7 ? '#EF4444' : '#A78BFA',
+                }}>
+                  {card.dday === 0 ? 'D-DAY' : `D-${card.dday}`}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={styles.actions}>
         <button style={styles.actionBtn} onClick={() => { resetCreateForm(); setShowCreate(true) }}>
@@ -199,16 +339,10 @@ export default function Home({ session }: { session: any }) {
                   <span>·</span>
                   <span>{visibilityInfo[g.buyer_visibility]?.emoji} {visibilityInfo[g.buyer_visibility]?.label}</span>
                   {g.event_mode === 'group' && g.group_event_type && (
-                    <>
-                      <span>·</span>
-                      <span>{eventEmoji[g.group_event_type] || '📅'} {g.group_event_title || g.group_event_type}</span>
-                    </>
+                    <><span>·</span><span>{eventEmoji[g.group_event_type] || '📅'} {g.group_event_title || g.group_event_type}</span></>
                   )}
                   {g.event_mode === 'individual' && (
-                    <>
-                      <span>·</span>
-                      <span>👤 개별 이벤트</span>
-                    </>
+                    <><span>·</span><span>👤 개별 이벤트</span></>
                   )}
                 </div>
               </div>
@@ -224,14 +358,11 @@ export default function Home({ session }: { session: any }) {
           <div style={{ ...styles.modal, maxHeight: '92vh', overflowY: 'auto' }}>
             <div style={styles.modalHandle} />
             <div style={styles.modalTitle}>✨ 새 그룹 만들기</div>
-
-            {/* 기본 정보 */}
             <input style={styles.input} placeholder="그룹 이름 *" value={newGroupName} onChange={e => setNewGroupName(e.target.value)} />
             <select style={styles.input} value={newGroupType} onChange={e => setNewGroupType(e.target.value)}>
               <option>커플</option><option>가족</option><option>친구</option><option>직장</option><option>기타</option>
             </select>
 
-            {/* 이벤트 모드 */}
             <div style={styles.subTitle}>📅 이벤트 설정</div>
             <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
               {[
@@ -249,7 +380,6 @@ export default function Home({ session }: { session: any }) {
               ))}
             </div>
 
-            {/* 공통 이벤트 설정 */}
             {newEventMode === 'group' && (
               <div style={{ background: '#F9FAFB', borderRadius: '12px', padding: '12px', marginBottom: '12px' }}>
                 <div style={{ fontSize: '13px', fontWeight: 600, color: '#374151', marginBottom: '10px' }}>이벤트 정보</div>
@@ -270,32 +400,29 @@ export default function Home({ session }: { session: any }) {
               </div>
             )}
 
-            {/* 개별 이벤트 안내 */}
             {newEventMode === 'individual' && (
               <div style={{ background: '#EDE9FE', borderRadius: '12px', padding: '12px', marginBottom: '12px', fontSize: '12px', color: '#A78BFA' }}>
-                👤 각 멤버가 프로필에서 자신의 이벤트를 추가해요. 생일·기념일·졸업 등 각자 다른 이벤트를 설정할 수 있어요!
+                👤 각 멤버가 프로필에서 자신의 이벤트를 추가해요!
               </div>
             )}
 
-            {/* 구매자 공개 설정 */}
             <div style={styles.subTitle}>👀 구매자 공개 설정</div>
-            {Object.entries(visibilityInfo).map(([value, info]) => (
-              <div key={value} onClick={() => setNewGroupVisibility(value)} style={{
+            {[
+              { value: 'surprise', label: '🎁 서프라이즈 모드', desc: '받는 사람에게 구매자가 보이지 않아요' },
+              { value: 'public', label: '👀 모두 공개', desc: '그룹 멤버 모두 구매자를 볼 수 있어요' },
+              { value: 'private', label: '🔒 완전 비공개', desc: '구매자 이름을 모두에게 숨겨요' },
+            ].map(opt => (
+              <div key={opt.value} onClick={() => setNewGroupVisibility(opt.value)} style={{
                 padding: '12px 14px', marginBottom: '8px', borderRadius: '12px', cursor: 'pointer',
-                border: `1.5px solid ${newGroupVisibility === value ? '#F472B6' : '#E5E7EB'}`,
-                background: newGroupVisibility === value ? '#FDF2F8' : 'white'
+                border: `1.5px solid ${newGroupVisibility === opt.value ? '#F472B6' : '#E5E7EB'}`,
+                background: newGroupVisibility === opt.value ? '#FDF2F8' : 'white'
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '3px' }}>
-                  <span style={{ fontSize: '18px' }}>{info.emoji}</span>
-                  <span style={{ fontSize: '14px', fontWeight: 600, color: newGroupVisibility === value ? '#F472B6' : '#374151' }}>
-                    {info.label}
-                  </span>
-                  {value === 'surprise' && (
-                    <span style={{ fontSize: '10px', background: '#F472B6', color: 'white', padding: '2px 6px', borderRadius: '50px' }}>추천</span>
-                  )}
-                  {newGroupVisibility === value && <span style={{ marginLeft: 'auto', color: '#F472B6' }}>✅</span>}
+                  <span style={{ fontSize: '14px', fontWeight: 600, color: newGroupVisibility === opt.value ? '#F472B6' : '#374151' }}>{opt.label}</span>
+                  {opt.value === 'surprise' && <span style={{ fontSize: '10px', background: '#F472B6', color: 'white', padding: '2px 6px', borderRadius: '50px' }}>추천</span>}
+                  {newGroupVisibility === opt.value && <span style={{ marginLeft: 'auto', color: '#F472B6' }}>✅</span>}
                 </div>
-                <div style={{ fontSize: '12px', color: '#9CA3AF', marginLeft: '26px' }}>{info.desc}</div>
+                <div style={{ fontSize: '12px', color: '#9CA3AF' }}>{opt.desc}</div>
               </div>
             ))}
 
@@ -313,10 +440,8 @@ export default function Home({ session }: { session: any }) {
             <div style={styles.modalTitle}>📩 초대 코드로 참여</div>
             <input
               style={{ ...styles.input, textAlign: 'center', letterSpacing: '6px', fontSize: '20px', fontWeight: 700, textTransform: 'uppercase' }}
-              placeholder="ABC123"
-              value={joinCode}
-              onChange={e => setJoinCode(e.target.value.toUpperCase())}
-              maxLength={6}
+              placeholder="ABC123" value={joinCode}
+              onChange={e => setJoinCode(e.target.value.toUpperCase())} maxLength={6}
             />
             <button style={styles.btn} onClick={joinGroup}>참여하기</button>
             <button style={styles.cancelBtn} onClick={() => setShowJoin(false)}>취소</button>
@@ -337,7 +462,19 @@ const styles: Record<string, React.CSSProperties> = {
   username: { fontSize: '22px', fontWeight: 700, color: '#111827' },
   profileBtn: { background: 'linear-gradient(135deg, #F472B6, #A78BFA)', color: 'white', border: 'none', borderRadius: '50px', padding: '8px 16px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' },
   logoutBtn: { background: 'white', border: '1.5px solid #E5E7EB', borderRadius: '50px', padding: '8px 16px', fontSize: '13px', cursor: 'pointer' },
-  actions: { display: 'flex', gap: '12px', padding: '20px' },
+  ddaySection: { padding: '16px 16px 0' },
+  ddaySectionTitle: { fontSize: '14px', fontWeight: 700, color: '#111827', marginBottom: '10px' },
+  ddayList: { display: 'flex', flexDirection: 'column', gap: '8px' },
+  ddayCard: {
+    background: 'white', borderRadius: '14px', padding: '14px',
+    display: 'flex', alignItems: 'center', gap: '12px',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.08)', cursor: 'pointer'
+  },
+  ddayEmoji: { fontSize: '28px', flexShrink: 0 },
+  ddayTitle: { fontSize: '14px', fontWeight: 600, color: '#111827', marginBottom: '2px' },
+  ddayMeta: { fontSize: '12px', color: '#9CA3AF' },
+  ddayBadge: { padding: '5px 12px', borderRadius: '50px', fontSize: '13px', fontWeight: 700, flexShrink: 0 },
+  actions: { display: 'flex', gap: '12px', padding: '16px 20px' },
   actionBtn: {
     flex: 1, background: 'white', border: 'none', borderRadius: '16px',
     padding: '16px 12px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px',
@@ -356,10 +493,7 @@ const styles: Record<string, React.CSSProperties> = {
     position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
     display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 200
   },
-  modal: {
-    background: 'white', borderRadius: '24px 24px 0 0', width: '100%',
-    maxWidth: '480px', padding: '20px 20px 40px'
-  },
+  modal: { background: 'white', borderRadius: '24px 24px 0 0', width: '100%', maxWidth: '480px', padding: '20px 20px 40px' },
   modalHandle: { width: '40px', height: '4px', background: '#E5E7EB', borderRadius: '2px', margin: '0 auto 20px' },
   modalTitle: { fontSize: '18px', fontWeight: 700, marginBottom: '20px' },
   input: {
