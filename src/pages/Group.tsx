@@ -15,6 +15,8 @@ const eventEmoji: Record<string, string> = {
   '명절': '🎆', '기타': '📅'
 }
 
+const THANKS_EMOJIS = ['💝', '🙏', '😊', '🥰', '💕', '✨', '🎉', '💖', '😍', '🌸']
+
 export default function Group({ group: initialGroup, session, onBack }: { group: any, session: any, onBack: () => void }) {
   const [group, setGroup] = useState(initialGroup)
   const [wishes, setWishes] = useState<any[]>([])
@@ -24,6 +26,7 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
   const [showEdit, setShowEdit] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [showSecretComments, setShowSecretComments] = useState<string | null>(null)
+  const [showThanks, setShowThanks] = useState<any>(null)
   const [editingWish, setEditingWish] = useState<any>(null)
   const [filterMember, setFilterMember] = useState('all')
   const [filterCategory, setFilterCategory] = useState('all')
@@ -33,10 +36,12 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
   const [fetchingProduct, setFetchingProduct] = useState(false)
   const [productImageUrl, setProductImageUrl] = useState('')
 
-  // 비밀 댓글
   const [secretComments, setSecretComments] = useState<Record<string, any[]>>({})
   const [newComment, setNewComment] = useState('')
   const [submittingComment, setSubmittingComment] = useState(false)
+
+  const [thanksMessage, setThanksMessage] = useState('')
+  const [thanksEmoji, setThanksEmoji] = useState('💝')
 
   const [wishName, setWishName] = useState('')
   const [wishPrice, setWishPrice] = useState('')
@@ -87,9 +92,7 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
       .select('*, profiles(name)')
       .eq('wish_id', wishId)
       .order('created_at', { ascending: true })
-    if (data) {
-      setSecretComments(prev => ({ ...prev, [wishId]: data }))
-    }
+    if (data) setSecretComments(prev => ({ ...prev, [wishId]: data }))
   }
 
   const openSecretComments = async (wishId: string) => {
@@ -102,15 +105,10 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
     if (!newComment.trim()) return
     setSubmittingComment(true)
     const { error } = await supabase.from('secret_memos').insert({
-      wish_id: wishId,
-      group_id: group.id,
-      user_id: session.user.id,
-      content: newComment.trim()
+      wish_id: wishId, group_id: group.id,
+      user_id: session.user.id, content: newComment.trim()
     })
-    if (!error) {
-      setNewComment('')
-      await fetchSecretComments(wishId)
-    }
+    if (!error) { setNewComment(''); await fetchSecretComments(wishId) }
     setSubmittingComment(false)
   }
 
@@ -118,6 +116,21 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
     if (!confirm('댓글을 삭제할까요?')) return
     await supabase.from('secret_memos').delete().eq('id', commentId)
     await fetchSecretComments(wishId)
+  }
+
+  const submitThanks = async (wish: any) => {
+    const { error } = await supabase.from('wishes').update({
+      status: 'received',
+      received_at: new Date().toISOString(),
+      thanks_message: thanksMessage.trim() || null,
+      thanks_emoji: thanksEmoji
+    }).eq('id', wish.id)
+    if (!error) {
+      fetchWishes()
+      setShowThanks(null)
+      setThanksMessage('')
+      setThanksEmoji('💝')
+    }
   }
 
   const resetForm = () => {
@@ -189,7 +202,7 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
         if (choice) {
           await supabase.from('wishes').update({ occasion: eventType }).eq('group_id', group.id).neq('occasion', eventType)
         } else {
-          const confirmed = window.confirm(`정말로 [${eventType}]이 아닌 상품 ${mismatchedWishes.length}개를 삭제할까요?`)
+          const confirmed = window.confirm(`정말로 삭제할까요?`)
           if (!confirmed) return
           await supabase.from('wishes').delete().eq('group_id', group.id).neq('occasion', eventType).neq('occasion', '평소 위시리스트')
         }
@@ -197,14 +210,13 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
       }
     }
     setSavingSettings(true)
-    const { data, error } = await supabase
-      .from('groups').update({
-        name: settingName.trim(), buyer_visibility: settingVisibility,
-        event_mode: settingEventMode,
-        group_event_type: settingEventMode === 'group' ? eventType : null,
-        group_event_title: settingEventMode === 'group' ? (settingEventTitle || eventType) : null,
-        group_event_date: settingEventMode === 'group' && settingEventType !== '생일' ? settingEventDate : null,
-      }).eq('id', group.id).select().single()
+    const { data, error } = await supabase.from('groups').update({
+      name: settingName.trim(), buyer_visibility: settingVisibility,
+      event_mode: settingEventMode,
+      group_event_type: settingEventMode === 'group' ? eventType : null,
+      group_event_title: settingEventMode === 'group' ? (settingEventTitle || eventType) : null,
+      group_event_date: settingEventMode === 'group' && settingEventType !== '생일' ? settingEventDate : null,
+    }).eq('id', group.id).select().single()
     setSavingSettings(false)
     if (!error && data) { setGroup(data); setShowSettings(false); alert('✅ 그룹 설정이 저장됐어요!') }
     else alert('오류: ' + error?.message)
@@ -246,11 +258,16 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
 
   const markReceived = async (wish: any) => {
     if (wish.status === 'received') {
-      await supabase.from('wishes').update({ status: 'available', received_at: null }).eq('id', wish.id)
+      await supabase.from('wishes').update({
+        status: 'available', received_at: null,
+        thanks_message: null, thanks_emoji: null
+      }).eq('id', wish.id)
+      fetchWishes()
     } else {
-      await supabase.from('wishes').update({ status: 'received', received_at: new Date().toISOString() }).eq('id', wish.id)
+      setThanksMessage('')
+      setThanksEmoji('💝')
+      setShowThanks(wish)
     }
-    fetchWishes()
   }
 
   const deleteWish = async (id: string) => {
@@ -364,12 +381,6 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
               {fetchingProduct ? '⏳...' : '🔍 자동 인식'}
             </button>
           </div>
-          {productImageUrl && (
-            <div style={{background:'#F9FAFB', borderRadius:'10px', padding:'10px', fontSize:'12px', color:'#6B7280', display:'flex', alignItems:'center', gap:'8px'}}>
-              <img src={productImageUrl} style={{width:'48px', height:'48px', objectFit:'cover', borderRadius:'6px'}} onError={e => (e.currentTarget.style.display='none')} />
-              <span>✅ 상품 이미지를 불러왔어요!</span>
-            </div>
-          )}
         </div>
       )}
       {productImageUrl && (
@@ -397,7 +408,6 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
     </>
   )
 
-  // 비밀 댓글 모달
   const currentWish = wishes.find(w => w.id === showSecretComments)
   const currentComments = showSecretComments ? (secretComments[showSecretComments] || []) : []
 
@@ -460,8 +470,25 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
             <div style={{fontSize:'13px', color:'#9CA3AF'}}>+ 버튼을 눌러 원하는 선물을 추가해보세요!</div>
           </div>
         ) : filteredWishes.map(w => (
-          <div key={w.id} style={{...styles.wishCard, opacity: w.status==='received' ? 0.6 : 1}}>
-            {w.status === 'received' && <div style={styles.receivedBadge}>✅ 이미 받았어요</div>}
+          <div key={w.id} style={{...styles.wishCard, opacity: w.status==='received' ? 0.75 : 1}}>
+            {w.status === 'received' && (
+              <div style={{marginBottom:'8px'}}>
+                <div style={styles.receivedBadge}>✅ 이미 받았어요</div>
+                {w.thanks_message && (
+                  <div style={{
+                    background:'linear-gradient(135deg, #FDF2F8, #EDE9FE)',
+                    borderRadius:'12px', padding:'10px 14px', marginTop:'8px',
+                    display:'flex', alignItems:'flex-start', gap:'8px'
+                  }}>
+                    <span style={{fontSize:'20px', flexShrink:0}}>{w.thanks_emoji || '💝'}</span>
+                    <div>
+                      <div style={{fontSize:'11px', color:'#9CA3AF', marginBottom:'2px'}}>감사 메시지</div>
+                      <div style={{fontSize:'13px', color:'#374151', lineHeight:'1.5'}}>{w.thanks_message}</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             {w.status === 'bought' && <div style={styles.boughtBadge}>{getBuyerText(w)}</div>}
             <div style={{display:'flex', gap:'12px', alignItems:'flex-start'}}>
               <div style={styles.wishThumb}>
@@ -501,11 +528,8 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
                       <button style={styles.receivedBtn} onClick={() => markReceived(w)}>✅ 받았어요</button>
                     )
                   )}
-                  {/* 비밀 댓글 버튼 - 선물 주인은 못 봄 */}
                   {w.user_id !== session.user.id && (
-                    <button style={styles.secretBtn} onClick={() => openSecretComments(w.id)}>
-                      🤫 비밀 댓글
-                    </button>
+                    <button style={styles.secretBtn} onClick={() => openSecretComments(w.id)}>🤫 비밀 댓글</button>
                   )}
                   {w.user_id === session.user.id && <button style={styles.editBtn} onClick={() => openEdit(w)}>✏️</button>}
                   {w.user_id === session.user.id && <button style={styles.delBtn} onClick={() => deleteWish(w.id)}>🗑️</button>}
@@ -560,6 +584,58 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
         </div>
       )}
 
+      {/* 감사 메시지 모달 */}
+      {showThanks && (
+        <div style={styles.overlay} onClick={e => { if (e.target === e.currentTarget) setShowThanks(null) }}>
+          <div style={styles.modal}>
+            <div style={styles.modalHandle} />
+            <div style={styles.modalTitle}>💝 감사 메시지</div>
+            <div style={{fontSize:'13px', color:'#6B7280', marginBottom:'16px'}}>선물을 받은 소감을 남겨보세요! 그룹 멤버들이 볼 수 있어요 😊</div>
+
+            {/* 이모지 선택 */}
+            <div style={{marginBottom:'16px'}}>
+              <div style={{fontSize:'13px', fontWeight:600, color:'#374151', marginBottom:'8px'}}>이모지 선택</div>
+              <div style={{display:'flex', flexWrap:'wrap', gap:'8px'}}>
+                {THANKS_EMOJIS.map(emoji => (
+                  <div key={emoji} onClick={() => setThanksEmoji(emoji)} style={{
+                    width:'40px', height:'40px', borderRadius:'10px', display:'flex', alignItems:'center', justifyContent:'center',
+                    fontSize:'22px', cursor:'pointer',
+                    border:`2px solid ${thanksEmoji === emoji ? '#F472B6' : '#E5E7EB'}`,
+                    background: thanksEmoji === emoji ? '#FDF2F8' : 'white'
+                  }}>
+                    {emoji}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* 메시지 입력 */}
+            <div style={{marginBottom:'16px'}}>
+              <div style={{fontSize:'13px', fontWeight:600, color:'#374151', marginBottom:'8px'}}>감사 메시지 (선택)</div>
+              <textarea
+                style={{...styles.input, minHeight:'80px', resize:'vertical'}}
+                placeholder="예: 고마워! 진짜 갖고 싶었던 거야 🥰"
+                value={thanksMessage}
+                onChange={e => setThanksMessage(e.target.value)}
+              />
+            </div>
+
+            {/* 미리보기 */}
+            {(thanksMessage || thanksEmoji) && (
+              <div style={{background:'linear-gradient(135deg, #FDF2F8, #EDE9FE)', borderRadius:'12px', padding:'12px', marginBottom:'16px', display:'flex', gap:'8px', alignItems:'flex-start'}}>
+                <span style={{fontSize:'20px'}}>{thanksEmoji}</span>
+                <div style={{fontSize:'13px', color:'#374151'}}>{thanksMessage || '감사 메시지를 입력해주세요'}</div>
+              </div>
+            )}
+
+            <button style={styles.btn} onClick={() => submitThanks(showThanks)}>
+              ✅ 받았어요!
+            </button>
+            <button style={styles.cancelBtn} onClick={() => setShowThanks(null)}>나중에 할게요</button>
+          </div>
+        </div>
+      )}
+
       {/* 비밀 댓글 모달 */}
       {showSecretComments && currentWish && (
         <div style={styles.overlay} onClick={e => { if (e.target === e.currentTarget) setShowSecretComments(null) }}>
@@ -567,10 +643,10 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
             <div style={styles.modalHandle} />
             <div style={{marginBottom:'16px'}}>
               <div style={styles.modalTitle}>🤫 비밀 댓글</div>
-              <div style={{fontSize:'12px', color:'#9CA3AF', marginTop:'4px'}}>선물 주인({members.find(m => m.id === currentWish.user_id)?.name})은 이 댓글을 볼 수 없어요</div>
+              <div style={{fontSize:'12px', color:'#9CA3AF', marginTop:'4px'}}>
+                선물 주인({members.find(m => m.id === currentWish.user_id)?.name})은 이 댓글을 볼 수 없어요
+              </div>
             </div>
-
-            {/* 상품 정보 */}
             <div style={{background:'#F9FAFB', borderRadius:'12px', padding:'12px', marginBottom:'16px', display:'flex', gap:'10px', alignItems:'center'}}>
               <div style={{width:'40px', height:'40px', background:'#E5E7EB', borderRadius:'8px', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'20px', flexShrink:0, overflow:'hidden'}}>
                 {currentWish.image_url ? <img src={currentWish.image_url} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : '🎁'}
@@ -580,8 +656,6 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
                 <div style={{fontSize:'12px', color:'#F472B6'}}>{currentWish.price ? `${currentWish.price.toLocaleString()}원` : '가격 미정'}</div>
               </div>
             </div>
-
-            {/* 댓글 목록 */}
             <div style={{marginBottom:'16px', maxHeight:'300px', overflowY:'auto'}}>
               {currentComments.length === 0 ? (
                 <div style={{textAlign:'center', padding:'24px', color:'#9CA3AF', fontSize:'13px'}}>
@@ -610,12 +684,10 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
                 </div>
               ))}
             </div>
-
-            {/* 댓글 입력 */}
             <div style={{display:'flex', gap:'8px'}}>
               <input
                 style={{...styles.input, marginBottom:0, flex:1}}
-                placeholder="비밀 댓글 입력... (선물 주인은 못 봐요)"
+                placeholder="비밀 댓글 입력..."
                 value={newComment}
                 onChange={e => setNewComment(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && !submittingComment && addSecretComment(currentWish.id)}
@@ -745,7 +817,7 @@ const styles: Record<string, React.CSSProperties> = {
   wishList: { padding:'12px 16px 100px', display:'flex', flexDirection:'column', gap:'10px' },
   empty: { textAlign:'center', padding:'48px 24px', color:'#6B7280' },
   wishCard: { background:'white', borderRadius:'16px', padding:'14px', boxShadow:'0 1px 3px rgba(0,0,0,0.08)', position:'relative' },
-  receivedBadge: { background:'rgba(52,211,153,0.9)', color:'white', padding:'4px 12px', borderRadius:'50px', fontSize:'12px', fontWeight:700, marginBottom:'8px', display:'inline-block' },
+  receivedBadge: { background:'rgba(52,211,153,0.9)', color:'white', padding:'4px 12px', borderRadius:'50px', fontSize:'12px', fontWeight:700, display:'inline-block' },
   boughtBadge: { background:'#FEF3C7', color:'#92400E', padding:'4px 12px', borderRadius:'50px', fontSize:'12px', fontWeight:600, marginBottom:'8px', display:'inline-block' },
   wishThumb: { width:'64px', height:'64px', background:'#F3F4F6', borderRadius:'10px', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'28px', flexShrink:0, overflow:'hidden' },
   wishName: { fontSize:'14px', fontWeight:600, marginBottom:'3px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' },
