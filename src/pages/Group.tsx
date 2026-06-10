@@ -23,6 +23,7 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
   const [showInvite, setShowInvite] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [showSecretComments, setShowSecretComments] = useState<string | null>(null)
   const [editingWish, setEditingWish] = useState<any>(null)
   const [filterMember, setFilterMember] = useState('all')
   const [filterCategory, setFilterCategory] = useState('all')
@@ -31,6 +32,11 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
   const [viewingProfile, setViewingProfile] = useState<any>(null)
   const [fetchingProduct, setFetchingProduct] = useState(false)
   const [productImageUrl, setProductImageUrl] = useState('')
+
+  // 비밀 댓글
+  const [secretComments, setSecretComments] = useState<Record<string, any[]>>({})
+  const [newComment, setNewComment] = useState('')
+  const [submittingComment, setSubmittingComment] = useState(false)
 
   const [wishName, setWishName] = useState('')
   const [wishPrice, setWishPrice] = useState('')
@@ -43,7 +49,6 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
   const [wishColor, setWishColor] = useState('')
   const [wishSize, setWishSize] = useState('')
 
-  // 그룹 설정
   const [settingName, setSettingName] = useState('')
   const [settingVisibility, setSettingVisibility] = useState('surprise')
   const [settingEventMode, setSettingEventMode] = useState('individual')
@@ -76,6 +81,45 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
     setLoading(false)
   }
 
+  const fetchSecretComments = async (wishId: string) => {
+    const { data } = await supabase
+      .from('secret_memos')
+      .select('*, profiles(name)')
+      .eq('wish_id', wishId)
+      .order('created_at', { ascending: true })
+    if (data) {
+      setSecretComments(prev => ({ ...prev, [wishId]: data }))
+    }
+  }
+
+  const openSecretComments = async (wishId: string) => {
+    setShowSecretComments(wishId)
+    setNewComment('')
+    await fetchSecretComments(wishId)
+  }
+
+  const addSecretComment = async (wishId: string) => {
+    if (!newComment.trim()) return
+    setSubmittingComment(true)
+    const { error } = await supabase.from('secret_memos').insert({
+      wish_id: wishId,
+      group_id: group.id,
+      user_id: session.user.id,
+      content: newComment.trim()
+    })
+    if (!error) {
+      setNewComment('')
+      await fetchSecretComments(wishId)
+    }
+    setSubmittingComment(false)
+  }
+
+  const deleteSecretComment = async (commentId: string, wishId: string) => {
+    if (!confirm('댓글을 삭제할까요?')) return
+    await supabase.from('secret_memos').delete().eq('id', commentId)
+    await fetchSecretComments(wishId)
+  }
+
   const resetForm = () => {
     setWishName(''); setWishPrice(''); setWishShop(''); setWishUrl('')
     setWishCategory('기타'); setWishOccasion('평소 위시리스트')
@@ -94,7 +138,7 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
       if (info.category) setWishCategory(info.category)
       if (info.memo) setWishMemo(info.memo)
       if (info.imageUrl) setProductImageUrl(info.imageUrl)
-      alert('✅ 상품 정보를 불러왔어요! 수정이 필요하면 직접 변경해주세요.')
+      alert('✅ 상품 정보를 불러왔어요!')
     } catch (e) {
       alert('상품 정보를 불러오지 못했어요. 직접 입력해주세요.')
     }
@@ -133,17 +177,14 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
     if (settingEventMode === 'group' && settingEventType !== '생일' && !settingEventDate) {
       alert('이벤트 날짜를 입력해주세요!'); return
     }
-
     const eventType = settingEventType === '기타' ? settingCustomEvent : settingEventType
-
     if (settingEventMode === 'group' && group.event_mode !== 'group') {
       const mismatchedWishes = wishes.filter(w =>
         w.occasion && w.occasion !== '평소 위시리스트' && w.occasion !== eventType
       )
       if (mismatchedWishes.length > 0) {
         const choice = window.confirm(
-          `⚠️ 위시리스트 ${mismatchedWishes.length}개의 이벤트가 [${eventType}]과 달라요.\n\n` +
-          `확인 → 모두 [${eventType}]으로 변경\n취소 → 다른 이벤트 상품 삭제`
+          `⚠️ 위시리스트 ${mismatchedWishes.length}개의 이벤트가 [${eventType}]과 달라요.\n\n확인 → 모두 [${eventType}]으로 변경\n취소 → 다른 이벤트 상품 삭제`
         )
         if (choice) {
           await supabase.from('wishes').update({ occasion: eventType }).eq('group_id', group.id).neq('occasion', eventType)
@@ -155,50 +196,28 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
         fetchWishes()
       }
     }
-
     setSavingSettings(true)
     const { data, error } = await supabase
-      .from('groups')
-      .update({
-        name: settingName.trim(),
-        buyer_visibility: settingVisibility,
+      .from('groups').update({
+        name: settingName.trim(), buyer_visibility: settingVisibility,
         event_mode: settingEventMode,
         group_event_type: settingEventMode === 'group' ? eventType : null,
         group_event_title: settingEventMode === 'group' ? (settingEventTitle || eventType) : null,
         group_event_date: settingEventMode === 'group' && settingEventType !== '생일' ? settingEventDate : null,
-      })
-      .eq('id', group.id)
-      .select()
-      .single()
-
+      }).eq('id', group.id).select().single()
     setSavingSettings(false)
-    if (!error && data) {
-      setGroup(data)
-      setShowSettings(false)
-      alert('✅ 그룹 설정이 저장됐어요!')
-    } else {
-      alert('오류: ' + error?.message)
-    }
+    if (!error && data) { setGroup(data); setShowSettings(false); alert('✅ 그룹 설정이 저장됐어요!') }
+    else alert('오류: ' + error?.message)
   }
 
   const addWish = async () => {
     if (!wishName.trim()) { alert('상품명을 입력해주세요!'); return }
     const { error } = await supabase.from('wishes').insert({
-      group_id: group.id,
-      user_id: session.user.id,
-      name: wishName,
-      price: wishPrice ? parseInt(wishPrice) : null,
-      shop: wishShop,
-      url: wishUrl,
-      image_url: productImageUrl,
-      category: wishCategory,
-      occasion: wishOccasion,
-      priority: wishPriority,
-      memo: wishMemo,
-      color: wishColor,
-      size: wishSize,
-      buyer_visibility: group.buyer_visibility || 'surprise',
-      status: 'available'
+      group_id: group.id, user_id: session.user.id, name: wishName,
+      price: wishPrice ? parseInt(wishPrice) : null, shop: wishShop, url: wishUrl,
+      image_url: productImageUrl, category: wishCategory, occasion: wishOccasion,
+      priority: wishPriority, memo: wishMemo, color: wishColor, size: wishSize,
+      buyer_visibility: group.buyer_visibility || 'surprise', status: 'available'
     })
     if (!error) { fetchWishes(); setShowAdd(false); resetForm() }
     else alert('오류: ' + error.message)
@@ -261,7 +280,6 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
   }
 
   const isGroupCreator = group.created_by === session.user.id
-
   const filteredWishes = wishes.filter(w => {
     if (filterMember !== 'all' && w.user_id !== filterMember) return false
     if (filterCategory !== 'all' && w.category !== filterCategory) return false
@@ -279,7 +297,6 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
   const priorityColor: Record<string, string> = { high:'#FEE2E2', medium:'#FEF3C7', low:'#F3F4F6' }
   const priorityTextColor: Record<string, string> = { high:'#991B1B', medium:'#92400E', low:'#374151' }
 
-  // 멤버 프로필 보기
   if (viewingProfile) {
     return (
       <div style={styles.container}>
@@ -325,7 +342,7 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
           {!viewingProfile.favorite_brands?.length && !viewingProfile.gift_preferences && !viewingProfile.clothes_size && !viewingProfile.birthday && (
             <div style={{textAlign:'center', padding:'48px 24px', color:'#9CA3AF'}}>
               <div style={{fontSize:'48px', marginBottom:'12px'}}>👤</div>
-              <div style={{fontWeight:600, marginBottom:'6px'}}>아직 프로필을 작성하지 않았어요</div>
+              <div style={{fontWeight:600}}>아직 프로필을 작성하지 않았어요</div>
             </div>
           )}
         </div>
@@ -339,29 +356,12 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
         <button style={{...styles.modeTab, ...(addMode==='link' ? styles.modeTabActive : {})}} onClick={() => setAddMode('link')}>🔗 링크로 추가</button>
         <button style={{...styles.modeTab, ...(addMode==='manual' ? styles.modeTabActive : {})}} onClick={() => setAddMode('manual')}>✏️ 직접 입력</button>
       </div>
-
       {addMode === 'link' && (
         <div style={{marginBottom:'12px'}}>
           <div style={{display:'flex', gap:'8px', marginBottom:'8px'}}>
-            <input
-              style={{...styles.input, marginBottom:0, flex:1}}
-              placeholder="상품 링크 (https://...)"
-              value={wishUrl}
-              onChange={e => setWishUrl(e.target.value)}
-              type="url"
-            />
-            <button
-              style={{
-                background: fetchingProduct ? '#E5E7EB' : 'linear-gradient(135deg, #F472B6, #A78BFA)',
-                color: fetchingProduct ? '#9CA3AF' : 'white',
-                border:'none', borderRadius:'10px', padding:'0 16px',
-                fontSize:'13px', fontWeight:600, cursor: fetchingProduct ? 'not-allowed' : 'pointer',
-                whiteSpace:'nowrap', flexShrink:0
-              }}
-              onClick={handleFetchProduct}
-              disabled={fetchingProduct}
-            >
-              {fetchingProduct ? '⏳ 불러오는 중...' : '🔍 자동 인식'}
+            <input style={{...styles.input, marginBottom:0, flex:1}} placeholder="상품 링크 (https://...)" value={wishUrl} onChange={e => setWishUrl(e.target.value)} type="url" />
+            <button style={{background: fetchingProduct ? '#E5E7EB' : 'linear-gradient(135deg, #F472B6, #A78BFA)', color: fetchingProduct ? '#9CA3AF' : 'white', border:'none', borderRadius:'10px', padding:'0 16px', fontSize:'13px', fontWeight:600, cursor: fetchingProduct ? 'not-allowed' : 'pointer', whiteSpace:'nowrap', flexShrink:0}} onClick={handleFetchProduct} disabled={fetchingProduct}>
+              {fetchingProduct ? '⏳...' : '🔍 자동 인식'}
             </button>
           </div>
           {productImageUrl && (
@@ -372,14 +372,11 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
           )}
         </div>
       )}
-
-      {/* 상품 썸네일 미리보기 */}
       {productImageUrl && (
         <div style={{textAlign:'center', marginBottom:'12px'}}>
           <img src={productImageUrl} style={{width:'100px', height:'100px', objectFit:'cover', borderRadius:'12px', border:'1.5px solid #E5E7EB'}} onError={e => (e.currentTarget.style.display='none')} />
         </div>
       )}
-
       <input style={styles.input} placeholder="상품명 *" value={wishName} onChange={e => setWishName(e.target.value)} />
       <input style={styles.input} placeholder="가격 (예: 50,000)" value={wishPrice ? Number(wishPrice.replace(/,/g, '')).toLocaleString() : ''} onChange={e => { const raw = e.target.value.replace(/,/g, ''); if (/^\d*$/.test(raw)) setWishPrice(raw) }} type="text" inputMode="numeric" />
       <input style={styles.input} placeholder="파는 곳 (예: 쿠팡, 올리브영)" value={wishShop} onChange={e => setWishShop(e.target.value)} />
@@ -399,6 +396,10 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
       <input style={styles.input} placeholder="메모 (예: 50ml 사이즈로 부탁해요)" value={wishMemo} onChange={e => setWishMemo(e.target.value)} />
     </>
   )
+
+  // 비밀 댓글 모달
+  const currentWish = wishes.find(w => w.id === showSecretComments)
+  const currentComments = showSecretComments ? (secretComments[showSecretComments] || []) : []
 
   return (
     <div style={styles.container}>
@@ -463,7 +464,6 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
             {w.status === 'received' && <div style={styles.receivedBadge}>✅ 이미 받았어요</div>}
             {w.status === 'bought' && <div style={styles.boughtBadge}>{getBuyerText(w)}</div>}
             <div style={{display:'flex', gap:'12px', alignItems:'flex-start'}}>
-              {/* 상품 이미지 */}
               <div style={styles.wishThumb}>
                 {w.image_url ? (
                   <img src={w.image_url} style={{width:'100%', height:'100%', objectFit:'cover', borderRadius:'10px'}} onError={e => { e.currentTarget.style.display='none' }} />
@@ -489,17 +489,23 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
                   {w.url && <button style={styles.linkBtn} onClick={() => window.open(w.url, '_blank')}>🔗 보러가기</button>}
                   {w.user_id !== session.user.id && w.status !== 'received' && (
                     w.status === 'bought' && w.bought_by === session.user.id ? (
-                      <button style={{...styles.buyBtn, background:'#FEE2E2', color:'#EF4444'}} onClick={() => markBought(w)}>↩️ 취소하기</button>
+                      <button style={{...styles.buyBtn, background:'#FEE2E2', color:'#EF4444'}} onClick={() => markBought(w)}>↩️ 취소</button>
                     ) : w.status === 'available' ? (
                       <button style={styles.buyBtn} onClick={() => markBought(w)}>🛍️ 내가 살게요</button>
                     ) : null
                   )}
                   {w.user_id === session.user.id && (
                     w.status === 'received' ? (
-                      <button style={{...styles.receivedBtn, background:'#FEE2E2', color:'#EF4444'}} onClick={() => markReceived(w)}>↩️ 받음 취소</button>
+                      <button style={{...styles.receivedBtn, background:'#FEE2E2', color:'#EF4444'}} onClick={() => markReceived(w)}>↩️ 취소</button>
                     ) : (
                       <button style={styles.receivedBtn} onClick={() => markReceived(w)}>✅ 받았어요</button>
                     )
+                  )}
+                  {/* 비밀 댓글 버튼 - 선물 주인은 못 봄 */}
+                  {w.user_id !== session.user.id && (
+                    <button style={styles.secretBtn} onClick={() => openSecretComments(w.id)}>
+                      🤫 비밀 댓글
+                    </button>
                   )}
                   {w.user_id === session.user.id && <button style={styles.editBtn} onClick={() => openEdit(w)}>✏️</button>}
                   {w.user_id === session.user.id && <button style={styles.delBtn} onClick={() => deleteWish(w.id)}>🗑️</button>}
@@ -554,6 +560,79 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
         </div>
       )}
 
+      {/* 비밀 댓글 모달 */}
+      {showSecretComments && currentWish && (
+        <div style={styles.overlay} onClick={e => { if (e.target === e.currentTarget) setShowSecretComments(null) }}>
+          <div style={{...styles.modal, maxHeight:'80vh', overflowY:'auto'}}>
+            <div style={styles.modalHandle} />
+            <div style={{marginBottom:'16px'}}>
+              <div style={styles.modalTitle}>🤫 비밀 댓글</div>
+              <div style={{fontSize:'12px', color:'#9CA3AF', marginTop:'4px'}}>선물 주인({members.find(m => m.id === currentWish.user_id)?.name})은 이 댓글을 볼 수 없어요</div>
+            </div>
+
+            {/* 상품 정보 */}
+            <div style={{background:'#F9FAFB', borderRadius:'12px', padding:'12px', marginBottom:'16px', display:'flex', gap:'10px', alignItems:'center'}}>
+              <div style={{width:'40px', height:'40px', background:'#E5E7EB', borderRadius:'8px', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'20px', flexShrink:0, overflow:'hidden'}}>
+                {currentWish.image_url ? <img src={currentWish.image_url} style={{width:'100%', height:'100%', objectFit:'cover'}} /> : '🎁'}
+              </div>
+              <div>
+                <div style={{fontSize:'13px', fontWeight:600, color:'#111827'}}>{currentWish.name}</div>
+                <div style={{fontSize:'12px', color:'#F472B6'}}>{currentWish.price ? `${currentWish.price.toLocaleString()}원` : '가격 미정'}</div>
+              </div>
+            </div>
+
+            {/* 댓글 목록 */}
+            <div style={{marginBottom:'16px', maxHeight:'300px', overflowY:'auto'}}>
+              {currentComments.length === 0 ? (
+                <div style={{textAlign:'center', padding:'24px', color:'#9CA3AF', fontSize:'13px'}}>
+                  아직 비밀 댓글이 없어요<br/>첫 번째 댓글을 남겨보세요! 🤫
+                </div>
+              ) : currentComments.map((c: any) => (
+                <div key={c.id} style={{
+                  marginBottom:'10px', padding:'10px 12px', borderRadius:'12px',
+                  background: c.user_id === session.user.id ? '#FDF2F8' : '#F9FAFB',
+                  border: `1px solid ${c.user_id === session.user.id ? '#FCE7F3' : '#F3F4F6'}`
+                }}>
+                  <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'4px'}}>
+                    <span style={{fontSize:'12px', fontWeight:600, color: c.user_id === session.user.id ? '#F472B6' : '#374151'}}>
+                      {c.profiles?.name || '알 수 없음'} {c.user_id === session.user.id ? '(나)' : ''}
+                    </span>
+                    <div style={{display:'flex', alignItems:'center', gap:'8px'}}>
+                      <span style={{fontSize:'10px', color:'#9CA3AF'}}>
+                        {new Date(c.created_at).toLocaleDateString('ko-KR', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'})}
+                      </span>
+                      {c.user_id === session.user.id && (
+                        <button style={{background:'none', border:'none', cursor:'pointer', fontSize:'12px', color:'#9CA3AF', padding:'0'}} onClick={() => deleteSecretComment(c.id, currentWish.id)}>🗑️</button>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{fontSize:'13px', color:'#374151', lineHeight:'1.5'}}>{c.content}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* 댓글 입력 */}
+            <div style={{display:'flex', gap:'8px'}}>
+              <input
+                style={{...styles.input, marginBottom:0, flex:1}}
+                placeholder="비밀 댓글 입력... (선물 주인은 못 봐요)"
+                value={newComment}
+                onChange={e => setNewComment(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && !submittingComment && addSecretComment(currentWish.id)}
+              />
+              <button
+                style={{background:'linear-gradient(135deg, #F472B6, #A78BFA)', color:'white', border:'none', borderRadius:'10px', padding:'0 16px', fontSize:'13px', fontWeight:600, cursor:'pointer', flexShrink:0}}
+                onClick={() => addSecretComment(currentWish.id)}
+                disabled={submittingComment}
+              >
+                {submittingComment ? '...' : '전송'}
+              </button>
+            </div>
+            <button style={styles.cancelBtn} onClick={() => setShowSecretComments(null)}>닫기</button>
+          </div>
+        </div>
+      )}
+
       {/* 그룹 설정 모달 */}
       {showSettings && (
         <div style={styles.overlay} onClick={e => { if (e.target === e.currentTarget) setShowSettings(false) }}>
@@ -566,7 +645,7 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
             <div style={settingSection}>
               <div style={settingTitle}>📝 기본 정보</div>
               <label style={styles.label}>그룹 이름</label>
-              <input style={styles.input} placeholder="그룹 이름" value={settingName} onChange={e => setSettingName(e.target.value)} />
+              <input style={styles.input} value={settingName} onChange={e => setSettingName(e.target.value)} />
             </div>
             <div style={settingSection}>
               <div style={settingTitle}>📅 이벤트 설정</div>
@@ -591,15 +670,11 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
                   <select style={styles.input} value={settingEventType} onChange={e => setSettingEventType(e.target.value)}>
                     {EVENT_TYPES.map(t => <option key={t}>{t}</option>)}
                   </select>
-                  {settingEventType === '기타' && (
-                    <input style={styles.input} placeholder="이벤트 이름 직접 입력" value={settingCustomEvent} onChange={e => setSettingCustomEvent(e.target.value)} />
-                  )}
+                  {settingEventType === '기타' && <input style={styles.input} placeholder="이벤트 이름" value={settingCustomEvent} onChange={e => setSettingCustomEvent(e.target.value)} />}
                   <label style={styles.label}>이벤트 이름</label>
-                  <input style={styles.input} placeholder={`예: 민수씨 ${settingEventType}`} value={settingEventTitle} onChange={e => setSettingEventTitle(e.target.value)} />
+                  <input style={styles.input} value={settingEventTitle} onChange={e => setSettingEventTitle(e.target.value)} />
                   {settingEventType === '생일' ? (
-                    <div style={{background:'#FDF2F8', borderRadius:'10px', padding:'10px', fontSize:'12px', color:'#F472B6', marginBottom:'12px'}}>
-                      🎂 각 멤버의 프로필 생일이 자동으로 연동돼요!
-                    </div>
+                    <div style={{background:'#FDF2F8', borderRadius:'10px', padding:'10px', fontSize:'12px', color:'#F472B6', marginBottom:'12px'}}>🎂 각 멤버의 프로필 생일이 자동으로 연동돼요!</div>
                   ) : (
                     <>
                       <label style={styles.label}>이벤트 날짜</label>
@@ -609,9 +684,7 @@ export default function Group({ group: initialGroup, session, onBack }: { group:
                 </>
               )}
               {settingEventMode === 'individual' && (
-                <div style={{background:'#EDE9FE', borderRadius:'10px', padding:'10px', fontSize:'12px', color:'#A78BFA'}}>
-                  👤 각 멤버가 프로필에서 자신의 이벤트를 추가해요!
-                </div>
+                <div style={{background:'#EDE9FE', borderRadius:'10px', padding:'10px', fontSize:'12px', color:'#A78BFA'}}>👤 각 멤버가 프로필에서 자신의 이벤트를 추가해요!</div>
               )}
             </div>
             <div style={settingSection}>
@@ -683,7 +756,8 @@ const styles: Record<string, React.CSSProperties> = {
   linkBtn: { background:'#FCE7F3', color:'#F472B6', border:'none', borderRadius:'50px', padding:'5px 12px', fontSize:'11px', fontWeight:600, cursor:'pointer' },
   buyBtn: { background:'#D1FAE5', color:'#059669', border:'none', borderRadius:'50px', padding:'5px 12px', fontSize:'11px', fontWeight:600, cursor:'pointer' },
   receivedBtn: { background:'#EDE9FE', color:'#A78BFA', border:'none', borderRadius:'50px', padding:'5px 12px', fontSize:'11px', fontWeight:600, cursor:'pointer' },
-  editBtn: { background:'#FEF3C7', color:'#92400E', border:'none', borderRadius:'50px', padding:'5px 12px', fontSize:'11px', cursor:'pointer' },
+  secretBtn: { background:'#FEF3C7', color:'#92400E', border:'none', borderRadius:'50px', padding:'5px 12px', fontSize:'11px', fontWeight:600, cursor:'pointer' },
+  editBtn: { background:'#F3F4F6', color:'#6B7280', border:'none', borderRadius:'50px', padding:'5px 12px', fontSize:'11px', cursor:'pointer' },
   delBtn: { background:'#F3F4F6', color:'#9CA3AF', border:'none', borderRadius:'50px', padding:'5px 12px', fontSize:'11px', cursor:'pointer' },
   fab: { position:'fixed', bottom:'24px', right:'20px', width:'56px', height:'56px', borderRadius:'50%', background:'linear-gradient(135deg, #F472B6, #A78BFA)', border:'none', cursor:'pointer', fontSize:'26px', color:'white', boxShadow:'0 4px 20px rgba(244,114,182,0.5)', zIndex:100 },
   overlay: { position:'fixed', inset:0, background:'rgba(0,0,0,0.45)', display:'flex', alignItems:'flex-end', justifyContent:'center', zIndex:200 },
