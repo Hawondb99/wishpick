@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../supabase'
 import Group from './Group'
 import Profile from './Profile'
+import Notifications from './Notifications'
 
 const EVENT_TYPES = [
   '생일', '결혼기념일', '연애기념일', '졸업', '입사/승진',
@@ -33,6 +34,7 @@ export default function Home({ session }: { session: any }) {
   const [showCreate, setShowCreate] = useState(false)
   const [showJoin, setShowJoin] = useState(false)
   const [showProfile, setShowProfile] = useState(false)
+  const [showNotifications, setShowNotifications] = useState(false)
   const [newGroupName, setNewGroupName] = useState('')
   const [newGroupType, setNewGroupType] = useState('친구')
   const [newGroupVisibility, setNewGroupVisibility] = useState('surprise')
@@ -86,10 +88,22 @@ export default function Home({ session }: { session: any }) {
     const alertDays = myProfile?.dday_alert_days || 30
     const maxDays = alertDays === 9999 ? 99999 : alertDays
 
+    // 알림 설정 가져오기
+    const { data: notifSettings } = await supabase
+      .from('notification_settings')
+      .select('*')
+      .eq('user_id', session.user.id)
+
+    const isEventEnabled = (groupId: string, eventType: string) => {
+      if (!notifSettings) return true
+      const setting = notifSettings.find(s => s.group_id === groupId && s.event_type === eventType)
+      return setting ? setting.is_enabled : true
+    }
+
     for (const g of groupList) {
-      // 공통 이벤트 그룹
       if (g.event_mode === 'group' && g.group_event_type) {
         if (g.group_event_type === '생일') {
+          if (!isEventEnabled(g.id, '생일')) continue
           const { data: members } = await supabase
             .from('group_members')
             .select('profiles(id, name, birthday)')
@@ -116,6 +130,7 @@ export default function Home({ session }: { session: any }) {
             }
           }
         } else if (g.group_event_date) {
+          if (!isEventEnabled(g.id, g.group_event_type)) continue
           const eventDate = new Date(g.group_event_date)
           const diff = Math.ceil((eventDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
           if (diff >= 0 && diff <= maxDays) {
@@ -132,7 +147,6 @@ export default function Home({ session }: { session: any }) {
         }
       }
 
-      // 개별 이벤트 그룹
       if (g.event_mode === 'individual') {
         const { data: members } = await supabase
           .from('group_members')
@@ -143,6 +157,7 @@ export default function Home({ session }: { session: any }) {
           for (const m of members) {
             const p: any = m.profiles
             if (p?.birthday && p.id !== session.user.id) {
+              if (!isEventEnabled(g.id, '생일')) continue
               const bd = new Date(p.birthday)
               bd.setFullYear(today.getFullYear())
               if (bd < today) bd.setFullYear(today.getFullYear() + 1)
@@ -161,7 +176,6 @@ export default function Home({ session }: { session: any }) {
           }
         }
 
-        // 개인 등록 이벤트
         const { data: events } = await supabase
           .from('events')
           .select('*, profiles(name)')
@@ -172,6 +186,7 @@ export default function Home({ session }: { session: any }) {
           for (const ev of events) {
             const memberInGroup = members.find((m: any) => m.profiles?.id === ev.user_id)
             if (!memberInGroup || !ev.event_date) continue
+            if (!isEventEnabled(g.id, ev.event_type)) continue
             const evDate = new Date(ev.event_date)
             if (ev.is_recurring) {
               evDate.setFullYear(today.getFullYear())
@@ -255,6 +270,10 @@ export default function Home({ session }: { session: any }) {
     return <Profile session={session} onBack={() => { setShowProfile(false); fetchProfile() }} />
   }
 
+  if (showNotifications) {
+    return <Notifications session={session} onBack={() => setShowNotifications(false)} />
+  }
+
   if (currentGroup) {
     return <Group group={currentGroup} session={session} onBack={() => { setCurrentGroup(null); fetchGroups() }} />
   }
@@ -269,6 +288,7 @@ export default function Home({ session }: { session: any }) {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
+          <button style={styles.notifBtn} onClick={() => setShowNotifications(true)}>🔔</button>
           <button style={styles.profileBtn} onClick={() => setShowProfile(true)}>👤 프로필</button>
           <button style={styles.logoutBtn} onClick={() => supabase.auth.signOut()}>로그아웃</button>
         </div>
@@ -382,7 +402,6 @@ export default function Home({ session }: { session: any }) {
 
             {newEventMode === 'group' && (
               <div style={{ background: '#F9FAFB', borderRadius: '12px', padding: '12px', marginBottom: '12px' }}>
-                <div style={{ fontSize: '13px', fontWeight: 600, color: '#374151', marginBottom: '10px' }}>이벤트 정보</div>
                 <select style={styles.input} value={newGroupEventType} onChange={e => setNewGroupEventType(e.target.value)}>
                   {EVENT_TYPES.map(t => <option key={t}>{t}</option>)}
                 </select>
@@ -460,6 +479,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   greeting: { fontSize: '13px', color: '#6B7280', marginBottom: '4px' },
   username: { fontSize: '22px', fontWeight: 700, color: '#111827' },
+  notifBtn: { background: 'white', border: '1.5px solid #E5E7EB', borderRadius: '50%', width: '36px', height: '36px', fontSize: '16px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' },
   profileBtn: { background: 'linear-gradient(135deg, #F472B6, #A78BFA)', color: 'white', border: 'none', borderRadius: '50px', padding: '8px 16px', fontSize: '13px', fontWeight: 600, cursor: 'pointer' },
   logoutBtn: { background: 'white', border: '1.5px solid #E5E7EB', borderRadius: '50px', padding: '8px 16px', fontSize: '13px', cursor: 'pointer' },
   ddaySection: { padding: '16px 16px 0' },
